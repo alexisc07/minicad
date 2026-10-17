@@ -72,6 +72,13 @@ const P = {
   sun: 'M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8z M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4',
   warn: 'M12 3L2 20h20z M12 10v4 M12 17v.01',
   clear: 'M4 20h16 M7 16L17 6 M14 4l6 6',
+  offset: 'M7 7h10v10H7z M3 3h18v18H3z',
+  fillet: 'M4 20V12a8 8 0 0 1 8-8h8 M4 4h4 M4 4v4',
+  chamfer: 'M4 20v-9l7-7h9 M4 4h4 M4 4v4',
+  ortho2d: 'M5 19V5 M5 19h14 M5 5l-2 3 M5 5l2 3 M19 19l-3-2 M19 19l-3 2',
+  dims: 'M3 8v8 M21 8v8 M3 12h18 M3 12l3-2 M3 12l3 2 M21 12l-3-2 M21 12l-3 2',
+  school: 'M2 9l10-5 10 5-10 5z M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5 M22 9v6',
+  play: 'M7 4l13 8-13 8z',
 };
 
 export function icon(name, size = 20) {

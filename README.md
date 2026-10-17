@@ -39,11 +39,22 @@ La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
 
 > Para ver este modelo, pulsa **Abrir modelo de ejemplo** en el panel derecho (o abre `MiniCAD.html#demo`).
 
+## ¿Primera vez con un programa CAD?
+
+MiniCAD incluye un **tutorial guiado** que te enseña a modelar tu primera pieza en unos 5 minutos: croquis, medidas exactas, empalmes, agujeros y extrusión.
+Cada paso se marca solo cuando lo completas.
+
+- Aparece al abrir MiniCAD por primera vez (pantalla de bienvenida).
+- Después, ábrelo con el botón del birrete 🎓 de la barra superior, desde el panel derecho (*Tutorial guiado*) o con `MiniCAD.html#tutorial`.
+- La **Ayuda (F1)** incluye un glosario de conceptos básicos y una tabla de equivalencias con los comandos de **AutoCAD**.
+
 ## Qué puede hacer
 
 | Área | Funciones |
 |---|---|
-| **Croquis 2D** | Polilínea, rectángulo (con radio de esquinas), rectángulo centrado, círculo, polígono y ranura. Ajuste a rejilla y a puntos, cotas en vivo y medidas exactas escribiendo números. |
+| **Croquis 2D** | Polilínea, rectángulo (con radio de esquinas), rectángulo centrado, círculo, polígono y ranura. Ajuste a rejilla y a extremos, puntos medios y centros, cotas en vivo y medidas exactas escribiendo números. |
+| **Modificar croquis** | Desfase (equidistancia), empalme y chaflán de esquinas, simetría, mover/copiar, girar, matriz rectangular y matriz polar, como en AutoCAD. |
+| **Ayudas de dibujo** | Coordenadas absolutas (`30,20`), relativas (`@40,0`) y polares (`@50<30`), modo **Orto** (F8) y cotas visibles de todas las entidades (D). |
 | **Operaciones** | Extruir (saliente o corte, normal, invertida, simétrica o "por todo") y revolución (de 1° a 360°). |
 | **Sólidos básicos** | Caja, cilindro, cono, esfera, toroide, tubo, prisma y cuña. Todas sus medidas se pueden editar. |
 | **Booleanas** | Unir, restar e intersecar. Son *paramétricas*: si cambias un operando, el resultado se recalcula. |
@@ -55,7 +66,8 @@ La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
 ## Flujo de trabajo básico (como en SolidWorks)
 
 1. **Croquis**: elige un plano (Alzado, Planta, Perfil) o haz clic sobre una cara de un sólido.
-2. Dibuja un perfil cerrado. Mientras dibujas, escribe una medida, por ejemplo `80x50` y Enter.
+2. Dibuja un perfil cerrado. Mientras dibujas, escribe una medida, por ejemplo `80x50` y Enter, o un punto como en AutoCAD (`-40,-25`, `@80,50`).
+   Redondea esquinas con **Empalme** (F) y copia contornos con **Desfase** (E).
 3. Pulsa **Extruir** o **Revolución**, ajusta la profundidad y pulsa ✓.
 4. Para hacer agujeros, dibuja sobre una cara y elige **Corte**.
 
@@ -67,6 +79,7 @@ La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
 - **Rueda**: zoom.
 - **W / E / R**: mover, rotar o escalar.
 - **K**: croquis. **M**: medir. **F**: ajustar la vista. **1 2 3 4**: vistas.
+- En el croquis: **L R T C P O** dibujan, **E F H** son desfase, empalme y chaflán, **F8** activa Orto y **D** muestra las cotas.
 - **Ctrl+Z / Ctrl+Y**: deshacer y rehacer. **Ctrl+S**: guardar. **Supr**: eliminar. **F1**: ayuda.
 
 ## Consejos para ahorrar memoria
@@ -84,6 +97,6 @@ npm install
 npm run build
 ```
 
-Pruebas de geometría: `node test/geo.test.mjs`.
+Pruebas de geometría: `node test/geo.test.mjs`. Pruebas de las operaciones de croquis (coordenadas, desfase, empalme, matrices): `node test/sketchops.test.mjs`.
 
 Usa three.js para el 3D, Manifold (WebAssembly) para las booleanas y three-bvh-csg como motor de respaldo.
