@@ -1,0 +1,18 @@
+﻿MiniCAD 3D - Modelador 3D ligero
+================================
+
+INSTALAR (recomendado)
+  1. Haz doble clic en "Instalar MiniCAD.bat".
+  2. Si Windows muestra un aviso de seguridad, pulsa "Más información" > "Ejecutar de todas formas".
+  3. Listo: aparece el icono "MiniCAD 3D" en el Escritorio y en el menú Inicio.
+
+USAR SIN INSTALAR (modo portátil)
+  Haz doble clic en "MiniCAD.html". Se abre en Chrome o Edge.
+
+DESINSTALAR
+  Configuración > Aplicaciones > Aplicaciones instaladas > MiniCAD 3D > Desinstalar.
+
+REQUISITOS
+  Windows 10 u 11 con Google Chrome o Microsoft Edge. No necesita internet.
+
+Más información: https://github.com/alexisc07/minicad

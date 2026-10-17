@@ -1,0 +1,52 @@
+# Publica una versión descargable al subir una etiqueta (por ejemplo v1.0.0)
+name: Publicar versión
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Empaquetar
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/MiniCAD
+          cp MiniCAD.html minicad.ico instalador/* dist/MiniCAD/
+          printf '%s\r\n' "$VERSION" > dist/MiniCAD/version.txt
+          cd dist
+          zip -r -9 MiniCAD.zip MiniCAD
+          cp MiniCAD/MiniCAD.html MiniCAD.html
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: MiniCAD 3D ${{ github.ref_name }}
+          files: |
+            dist/MiniCAD.zip
+            dist/MiniCAD.html
+          body: |
+            ## Descargar
+
+            **[⬇️ MiniCAD.zip](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/MiniCAD.zip)**: instalador con accesos directos (recomendado).
+
+            1. Descarga `MiniCAD.zip` y descomprímelo (clic derecho → *Extraer todo*).
+            2. Doble clic en **Instalar MiniCAD.bat**. Si Windows avisa, pulsa *Más información* → *Ejecutar de todas formas*.
+            3. Abre **MiniCAD 3D** desde el Escritorio o el menú Inicio.
+
+            ¿Sin instalar? Descarga solo **MiniCAD.html** y ábrelo con doble clic.
+
+            Requisitos: Windows 10/11 con Chrome o Edge. No necesita internet ni permisos de administrador.

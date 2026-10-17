@@ -5,6 +5,17 @@
 Modelador 3D ligero, al estilo de SolidWorks o AutoCAD, pensado para equipos con poca memoria.
 Todo el programa está en **un único archivo**: `MiniCAD.html`.
 
+## Descargar
+
+<p align="center"><a href="https://github.com/alexisc07/minicad/releases/latest/download/MiniCAD.zip"><b>⬇️ Descargar MiniCAD para Windows (ZIP)</b></a></p>
+
+1. Descarga **MiniCAD.zip** y descomprímelo (clic derecho → *Extraer todo*).
+2. Haz doble clic en **`Instalar MiniCAD.bat`**. Si Windows muestra un aviso, pulsa *Más información* → *Ejecutar de todas formas*.
+3. Listo: abre **MiniCAD 3D** desde el Escritorio o el menú Inicio.
+
+No necesita permisos de administrador ni internet. Se desinstala desde *Configuración → Aplicaciones*.
+Todas las versiones están en [Releases](https://github.com/alexisc07/minicad/releases).
+
 ## Cómo abrirlo
 
 1. Haz doble clic en `MiniCAD.html`.
