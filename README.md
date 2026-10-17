@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/banner.png" alt="MiniCAD 3D" width="100%"></p>
+
 # MiniCAD 3D
 
 Modelador 3D ligero, al estilo de SolidWorks o AutoCAD, pensado para equipos con poca memoria.
@@ -11,6 +13,12 @@ Todo el programa está en **un único archivo**: `MiniCAD.html`.
 
 Consumo típico: entre 15 y 60 MB de memoria del programa. SolidWorks necesita entre 8 y 16 GB.
 La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
+
+## Captura
+
+![MiniCAD 3D con el modelo de ejemplo](docs/captura.png)
+
+> Para ver este modelo, pulsa **Abrir modelo de ejemplo** en el panel derecho (o abre `MiniCAD.html#demo`).
 
 ## Qué puede hacer
 

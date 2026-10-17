@@ -153,15 +153,15 @@ export class Viewer extends THREE.EventDispatcher {
   }
 
   // Encuadra una caja (o toda la escena) con animación
-  fit(box, dir) {
+  fit(box, dir, margin = 1.5) {
     if (!box || box.isEmpty()) {
       box = new THREE.Box3(new THREE.Vector3(-50, 0, -50), new THREE.Vector3(50, 50, 50));
     }
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     const radius = Math.max(sphere.radius, 1);
     const d = dir ? dir.clone().normalize() : new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
-    const dist = (radius / Math.sin((this.persp.fov * Math.PI) / 360)) * 1.5;
-    this.animateTo(sphere.center.clone().addScaledVector(d, dist), sphere.center, radius * 1.5);
+    const dist = (radius / Math.sin((this.persp.fov * Math.PI) / 360)) * margin;
+    this.animateTo(sphere.center.clone().addScaledVector(d, dist), sphere.center, radius * margin);
   }
 
   sceneBox(onlyVisible = true) {

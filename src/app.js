@@ -17,7 +17,7 @@ const DEFAULTS = {
   light: false,
   display: 'edges',
   grid: true,
-  planes: true,
+  planes: false,
   snap: 1,
   sketchSnap: 1,
   gridSize: 400,
@@ -103,7 +103,8 @@ export class App {
     this.restoreAutosave();
     this.renderRibbon();
     this.refresh();
-    this.viewer.setView('iso');
+    if (location.hash === '#demo') this.loadDemo(false);
+    else this.viewer.setView('iso');
     setInterval(() => this.updateMemory(), 3000);
     this.updateMemory();
     this.setHint();
@@ -1898,6 +1899,7 @@ export class App {
           h('li', null, 'También puedes colocar ', h('b', null, 'sólidos básicos'), ' y combinarlos con Unir / Restar.')
         )
       ),
+      section('Ejemplo', h('button', { class: 'wide', onclick: () => this.loadDemo(true), html: icon('open', 16) + ' Abrir modelo de ejemplo' })),
     ];
   }
 
@@ -2446,6 +2448,49 @@ export class App {
   // =====================================================================
   // Archivos
   // =====================================================================
+  // Modelo de ejemplo: soporte con nervios y una polea
+  async loadDemo(ask = true) {
+    if (ask && this.doc.nodes.length && !(await this.confirm('Modelo de ejemplo', 'Se reemplazará el modelo actual. ¿Continuar?', 'Abrir ejemplo'))) return;
+    if (this.mode !== 'select') this.cancelMode();
+    const d = this.doc;
+    d.reset();
+    const basis = (x, y, n, p = [0, 0, 0]) => new THREE.Matrix4().makeBasis(new THREE.Vector3(...x), new THREE.Vector3(...y), new THREE.Vector3(...n)).setPosition(...p);
+    const TOP = [[1, 0, 0], [0, 0, -1], [0, 1, 0]];
+    const FRONT = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+    const RIGHT = [[0, 0, -1], [0, 1, 0], [1, 0, 0]];
+    const place = (node, b, p) => (setNodeMatrix(node, basis(...b, p)), node);
+    const holes = [[-48, -23], [48, -23], [-48, 23], [48, 23]].map(([x, y]) => ({ t: 'circle', x, y, r: 4.5 }));
+    const base = place(d.makeNode('extrude', { profiles: [{ t: 'rect', x: -60, y: -35, w: 120, h: 70, rr: 10 }, ...holes], depth: 10, dir: 1, extra: 0 }), TOP, [0, 0, 0]);
+    const arch = [[-40, 0], [40, 0], [40, 40]];
+    for (let i = 1; i < 24; i++) arch.push([40 * Math.cos((i / 24) * Math.PI), 40 + 40 * Math.sin((i / 24) * Math.PI)]);
+    arch.push([-40, 40]);
+    const wall = place(d.makeNode('extrude', { profiles: [{ t: 'poly', pts: arch }, { t: 'circle', x: 0, y: 40, r: 16 }], depth: 12, dir: 1, extra: 0 }), FRONT, [0, 10, -35]);
+    const rib = (x) => place(d.makeNode('extrude', { profiles: [{ t: 'poly', pts: [[23, 10], [-8, 10], [23, 45]] }], depth: 8, dir: 0, extra: 0 }), RIGHT, [x, 0, 0]);
+    const support = this.makeBoolean('union', [base, wall, rib(-28), rib(28)]);
+    support.name = 'Soporte';
+    support.color = '#a9b8cc';
+    const pulley = place(
+      d.makeNode('revolve', { profiles: [{ t: 'poly', pts: [[8, 0], [32, 0], [32, 4], [26, 8], [32, 12], [32, 16], [14, 16], [14, 26], [8, 26]] }], angle: 360, axis: 'y' }),
+      FRONT,
+      [115, 0, 10]
+    );
+    pulley.name = 'Polea';
+    pulley.color = '#d2b48c';
+    const pin = d.makeNode('cylinder', { r: 7.5, h: 70 });
+    pin.pos = [0, 50, -10];
+    pin.rot = [90, 0, 0];
+    pin.name = 'Eje';
+    pin.color = '#d79c9c';
+    d.nodes.push(support, pulley, pin);
+    this.history.clear();
+    this.selection = [];
+    this.docName = 'Ejemplo';
+    this.fileHandle = null;
+    this.dirty = false;
+    this.refresh();
+    this.viewer.fit(this.viewer.sceneBox(), new THREE.Vector3(1, 0.75, 1.15), 1.12);
+  }
+
   async newDoc() {
     if (this.doc.nodes.length && this.dirty && !(await this.confirm('Nuevo modelo', 'Se perderán los cambios no guardados. ¿Continuar?', 'Nuevo'))) return;
     if (this.mode !== 'select') this.cancelMode();
