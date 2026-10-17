@@ -1,0 +1,16 @@
+import * as THREE from 'three';
+import { Brush, Evaluator, ADDITION } from 'three-bvh-csg';
+import { getGeometry, bakeGeometry, nodeMatrix } from '../src/geometry.js';
+const ctx = { seg: 48, meshStore: new Map() };
+const N = (type, params, extra={}) => ({ id:'x', type, params, pos:[0,0,0], rot:[0,0,0], scl:[1,1,1], ...extra });
+const plate = N('extrude', {profiles:[{t:'rect',x:-50,y:-30,w:100,h:60},{t:'circle',x:-35,y:-15,r:5},{t:'circle',x:35,y:-15,r:5},{t:'circle',x:-35,y:15,r:5},{t:'circle',x:35,y:15,r:5},{t:'slot',x1:-15,y1:0,x2:15,y2:0,r:6}], depth:8, dir:1, extra:0},{rot:[-90,0,0], pos:[0,0,60]});
+const boss = N('tube', {ro:14, ri:8, h:30},{pos:[0,23,35]});
+const gp = bakeGeometry(getGeometry(plate, ctx), nodeMatrix(plate));
+const gb = bakeGeometry(getGeometry(boss, ctx), nodeMatrix(boss));
+let t=performance.now(); const A=new Brush(gp); A.prepareGeometry(); console.log('prepA', (performance.now()-t).toFixed(0));
+t=performance.now(); const B=new Brush(gb); B.prepareGeometry(); console.log('prepB', (performance.now()-t).toFixed(0));
+const ev = new Evaluator(); ev.attributes=['position','normal']; ev.useGroups=false;
+t=performance.now(); ev.evaluate(A,B,ADDITION); console.log('eval', (performance.now()-t).toFixed(0));
+t=performance.now(); ev.evaluate(A,B,ADDITION); console.log('eval2', (performance.now()-t).toFixed(0));
+const box = new Brush(new THREE.BoxGeometry(40,40,40)); const cyl = new Brush(new THREE.CylinderGeometry(5,5,60,48));
+t=performance.now(); ev.evaluate(box,cyl,ADDITION); console.log('boxcyl', (performance.now()-t).toFixed(0));
