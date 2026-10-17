@@ -11,6 +11,14 @@ Todo el programa está en **un único archivo**: `MiniCAD.html`.
 2. Se abre en tu navegador (recomendado **Microsoft Edge** o **Google Chrome**).
 3. No necesita instalación ni internet.
 
+### Acceso directo (recomendado)
+
+Haz doble clic en **`Crear acceso directo.bat`**. Crea el icono **MiniCAD 3D** en el Escritorio y en el menú Inicio.
+Con ese icono, MiniCAD se abre en su propia ventana, sin pestañas ni barra del navegador, como un programa instalado.
+
+Para anclarlo a la barra de tareas: abre MiniCAD, haz clic derecho en su icono de la barra → **Anclar a la barra de tareas**.
+Si mueves la carpeta a otro sitio, vuelve a ejecutar el `.bat`.
+
 Consumo típico: entre 15 y 60 MB de memoria del programa. SolidWorks necesita entre 8 y 16 GB.
 La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
 
