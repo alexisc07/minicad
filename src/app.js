@@ -3,13 +3,15 @@ import * as THREE from 'three';
 import { Viewer } from './viewer.js';
 import { SceneSync, EMPTY, applyTransform, edgesOf } from './scene.js';
 import { Sketcher, SKETCH_TOOLS, entitiesToDXF, dxfToEntities } from './sketch.js';
+import { affine, transformEntity, rectArray, polarArray, entityCenter, offsetEntity, cornerOp, toPoly } from './sketchops.js';
+import { Tutorial } from './tutorial.js';
 import { Doc, History, PALETTE } from './model.js';
 import { TYPES, OPS, defaultParams, nodeMatrix, setNodeMatrix, massProps, clearGeometryCache, buildRegions } from './geometry.js';
 import { exportSTL, exportOBJ, importMeshFile } from './io.js';
 import { icon } from './icons.js';
 import { h, evalNum, fmt, toast, debounce, storageGet, storageSet, downloadBlob, pickFile, DEG } from './util.js';
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 
 const DEFAULTS = {
   theme: 'light',
@@ -20,6 +22,8 @@ const DEFAULTS = {
   planes: false,
   snap: 1,
   sketchSnap: 1,
+  sketchOrtho: false,
+  sketchDims: true,
   gridSize: 400,
   gridStep: 10,
   stlZUp: true,
@@ -89,6 +93,7 @@ export class App {
     this.viewer = new Viewer(this.el.viewport, this.settings);
     this.sync = new SceneSync(this);
     this.sketcher = new Sketcher(this);
+    this.tutorial = new Tutorial(this);
     if (this.settings.ortho) this.viewer.setProjection(true);
     this.previewGroup = new THREE.Group();
     this.viewer.overlay.add(this.previewGroup);
@@ -105,6 +110,8 @@ export class App {
     this.refresh();
     if (location.hash === '#demo') this.loadDemo(false);
     else this.viewer.setView('iso');
+    if (location.hash === '#tutorial') this.tutorial.start();
+    else if (!location.hash && !storageGet('minicad.welcome')) setTimeout(() => this.showWelcome(), 300);
     setInterval(() => this.updateMemory(), 3000);
     this.updateMemory();
     this.setHint();
@@ -140,6 +147,7 @@ export class App {
         'div',
         { class: 'quick right' },
         qa('theme', 'Tema claro / oscuro', () => this.toggleTheme()),
+        qa('school', 'Tutorial de inicio', () => this.tutorial.start()),
         qa('settings', 'Opciones', () => this.openSettings()),
         qa('help', 'Ayuda y atajos (F1)', () => this.openHelp())
       )
@@ -217,6 +225,33 @@ export class App {
           groups: [
             { label: 'Dibujar', items: [tool('select', 'select'), tool('line', 'line'), tool('rect', 'rect'), tool('rectc', 'rectc'), tool('circle', 'circle'), tool('ngon', 'ngon'), tool('slot', 'slot')] },
             {
+              label: 'Modificar',
+              items: [
+                tool('offset', 'offset'),
+                tool('fillet', 'fillet'),
+                tool('chamfer', 'chamfer'),
+                T('mirror', 'Simetría', 'Copia simétrica de la entidad seleccionada', () => this.sketchModify('mirror'), { disabled: sk.selected < 0 }),
+                T('move', 'Mover', 'Mover o copiar la entidad seleccionada', () => this.sketchModify('move'), { disabled: sk.selected < 0 }),
+                T('rotate', 'Girar', 'Girar la entidad seleccionada', () => this.sketchModify('rotate'), { disabled: sk.selected < 0 }),
+                T('pattern-lin', 'Matriz', 'Copias de la entidad seleccionada en filas y columnas o alrededor de un centro', (e) => {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  this.showMenu(r.left, r.bottom + 4, [
+                    { label: 'Matriz rectangular…', icon: 'pattern-lin', action: () => this.sketchModify('array') },
+                    { label: 'Matriz polar…', icon: 'pattern-circ', action: () => this.sketchModify('polar') },
+                  ]);
+                }, { disabled: sk.selected < 0 }),
+              ],
+            },
+            {
+              label: 'Ayudas',
+              items: [
+                T('ortho2d', 'Orto', 'Modo Orto: líneas sólo horizontales o verticales (F8)', () => this.toggleSketchSetting('sketchOrtho'), { active: this.settings.sketchOrtho }),
+                T('dims', 'Cotas', 'Mostrar las medidas de las entidades (D)', () => this.toggleSketchSetting('sketchDims'), { active: this.settings.sketchDims }),
+              ],
+            },
+            { label: 'Operación', items: finish },
+            { label: 'Salir', items: [T('x', 'Cancelar', 'Salir del croquis sin crear operación', () => this.cancelSketch())] },
+            {
               label: 'Editar',
               items: [
                 T('undo', 'Deshacer', 'Deshacer en el croquis (Ctrl+Z)', () => sk.undo()),
@@ -226,8 +261,6 @@ export class App {
                 T('dxf', 'Exportar', 'Exportar el croquis a DXF (AutoCAD)', () => this.exportSketchDXF()),
               ],
             },
-            { label: 'Operación', items: finish },
-            { label: 'Salir', items: [T('x', 'Cancelar', 'Salir del croquis sin crear operación', () => this.cancelSketch())] },
           ],
         },
         vista: this.viewTab(T),
@@ -350,6 +383,7 @@ export class App {
               'button',
               {
                 class: 'rbtn' + (it.active ? ' on' : '') + (it.primary ? ' primary' : ''),
+                'data-label': it.label,
                 title: it.title,
                 disabled: !!it.disabled,
                 onclick: it.fn,
@@ -456,6 +490,17 @@ export class App {
     this.viewer.requestRender();
     this.renderRibbon();
     this.renderTree();
+  }
+
+  toggleSketchSetting(k) {
+    this.setSetting(k, !this.settings[k]);
+    if (k === 'sketchOrtho') toast('Orto ' + (this.settings.sketchOrtho ? 'activado: líneas horizontales y verticales' : 'desactivado'));
+    if (this.sketcher.active) {
+      this.sketcher.updatePreview();
+      this.sketcher.updateHud();
+    }
+    this.renderRibbon();
+    this.renderProps();
   }
 
   toggleTheme() {
@@ -651,7 +696,16 @@ export class App {
         this.sketcher.selected = i;
         this.sketcher.redraw();
         this.onSketchSelect(i);
-        this.showMenu(e.clientX, e.clientY, [{ label: 'Borrar entidad', icon: 'trash', action: () => this.sketcher.deleteSelected() }]);
+        this.showMenu(e.clientX, e.clientY, [
+          { label: 'Simetría…', icon: 'mirror', action: () => this.sketchModify('mirror') },
+          { label: 'Mover / copiar…', icon: 'move', action: () => this.sketchModify('move') },
+          { label: 'Girar…', icon: 'rotate', action: () => this.sketchModify('rotate') },
+          { label: 'Matriz rectangular…', icon: 'pattern-lin', action: () => this.sketchModify('array') },
+          { label: 'Matriz polar…', icon: 'pattern-circ', action: () => this.sketchModify('polar') },
+          { label: 'Desfase…', icon: 'offset', action: () => this.sketchModify('offset') },
+          { sep: true },
+          { label: 'Borrar entidad', icon: 'trash', danger: true, action: () => this.sketcher.deleteSelected() },
+        ]);
       }
       return;
     }
@@ -1067,6 +1121,7 @@ export class App {
   onSketchSelect() {
     this.renderProps();
     this.renderTree();
+    this.renderRibbon();
   }
 
   editSketch(id) {
@@ -1899,7 +1954,14 @@ export class App {
           h('li', null, 'También puedes colocar ', h('b', null, 'sólidos básicos'), ' y combinarlos con Unir / Restar.')
         )
       ),
-      section('Ejemplo', h('button', { class: 'wide', onclick: () => this.loadDemo(true), html: icon('open', 16) + ' Abrir modelo de ejemplo' })),
+      section(
+        'Aprender',
+        h('div', { class: 'stack' },
+          h('button', { class: 'wide primary', onclick: () => this.tutorial.start(), html: icon('school', 16) + ' Tutorial guiado (5 min)' }),
+          h('button', { class: 'wide', onclick: () => this.loadDemo(true), html: icon('open', 16) + ' Abrir modelo de ejemplo' }),
+          h('button', { class: 'wide', onclick: () => this.openHelp(), html: icon('help', 16) + ' Atajos y comandos (F1)' })
+        )
+      ),
     ];
   }
 
@@ -2074,13 +2136,36 @@ export class App {
       const e = sk.entities[sk.selected];
       const i = sk.selected;
       out.push(h('div', { class: 'ptitle' }, h('span', { html: icon({ rect: 'rect', circle: 'circle', ngon: 'ngon', slot: 'slot', poly: 'line' }[e.t], 18) }), h('span', null, `${sk.entityLabel(e)} ${i + 1}`)));
+      // Las polilíneas con muchos puntos (arcos) no muestran cada coordenada
+      const many = e.t === 'poly' && e.pts.length > 24;
       out.push(
         section(
           'Medidas',
-          ...sk.entityFields(i).map(([k, label, v]) =>
-            this.numField(label, v, (nv) => { sk.updateEntity(i, k, nv); this.renderProps(); }, { key: 'e_' + k, int: k === 'n', unit: k === 'n' ? '' : k === 'a' ? '°' : 'mm' })
-          ),
+          ...(many
+            ? [info('Puntos', String(e.pts.length)), h('p', { class: 'muted small' }, 'Contorno con arcos: usa las herramientas de Modificar para cambiarlo.')]
+            : sk.entityFields(i).map(([k, label, v]) =>
+                this.numField(label, v, (nv) => { sk.updateEntity(i, k, nv); this.renderProps(); }, { key: 'e_' + k, int: k === 'n', unit: k === 'n' ? '' : k === 'a' ? '°' : 'mm' })
+              )),
           h('button', { class: 'wide danger', onclick: () => sk.deleteSelected(), html: icon('trash', 16) + ' Borrar entidad' })
+        )
+      );
+      const corners = ['rect', 'ngon', 'poly'].includes(e.t);
+      out.push(
+        section(
+          'Modificar',
+          h(
+            'div',
+            { class: 'btnrow' },
+            actionBtn('mirror', 'Simetría', () => this.sketchModify('mirror')),
+            actionBtn('move', 'Mover / copiar', () => this.sketchModify('move')),
+            actionBtn('rotate', 'Girar', () => this.sketchModify('rotate')),
+            actionBtn('offset', 'Desfase', () => this.sketchModify('offset')),
+            actionBtn('pattern-lin', 'Matriz', () => this.sketchModify('array')),
+            actionBtn('pattern-circ', 'Matriz polar', () => this.sketchModify('polar')),
+            corners ? actionBtn('fillet', 'Redondear esquinas', () => this.sketchModify('fillet')) : null,
+            corners ? actionBtn('chamfer', 'Chaflán en esquinas', () => this.sketchModify('chamfer')) : null,
+            e.t === 'rect' || e.t === 'ngon' ? actionBtn('line', 'Convertir en polilínea', () => sk.applyEdit(i, toPoly(e))) : null
+          )
         )
       );
       return out;
@@ -2106,7 +2191,12 @@ export class App {
       section(
         'Opciones',
         this.selectField('Ajuste a rejilla', String(this.settings.sketchSnap), [['0', 'Sin ajuste'], ['0.1', '0.1 mm'], ['0.5', '0.5 mm'], ['1', '1 mm'], ['2', '2 mm'], ['5', '5 mm'], ['10', '10 mm']], (v) => this.setSetting('sketchSnap', +v)),
-        this.numField('Lados del polígono', sk.ngonSides, (v) => { sk.ngonSides = Math.max(3, Math.min(64, Math.round(v))); this.renderProps(); }, { key: 'ngon', int: true, min: 3 })
+        this.numField('Lados del polígono', sk.ngonSides, (v) => { sk.ngonSides = Math.max(3, Math.min(64, Math.round(v))); this.renderProps(); }, { key: 'ngon', int: true, min: 3 }),
+        this.numField('Distancia de desfase', sk.offsetDist, (v) => { sk.offsetDist = v; sk.updatePreview(); }, { key: 'offd', min: 0.001, unit: 'mm' }),
+        this.numField('Radio de empalme', sk.filletR, (v) => { sk.filletR = v; sk.updatePreview(); }, { key: 'filr', min: 0.001, unit: 'mm' }),
+        this.numField('Distancia de chaflán', sk.chamferD, (v) => { sk.chamferD = v; sk.updatePreview(); }, { key: 'chd', min: 0.001, unit: 'mm' }),
+        this.checkField('Orto: sólo horizontal / vertical (F8)', this.settings.sketchOrtho, () => this.toggleSketchSetting('sketchOrtho')),
+        this.checkField('Mostrar cotas (D)', this.settings.sketchDims, () => this.toggleSketchSetting('sketchDims'))
       )
     );
     out.push(
@@ -2118,12 +2208,131 @@ export class App {
           { class: 'tips' },
           h('li', null, 'Los perfiles dentro de otros se convierten en agujeros.'),
           h('li', null, 'Mientras dibujas, escribe un número y pulsa Enter para una medida exacta.'),
+          h('li', null, 'Coordenadas como en AutoCAD: ', h('b', null, '30,20'), ' (absoluta), ', h('b', null, '@40,0'), ' (relativa), ', h('b', null, '@50<30'), ' (polar).'),
           h('li', null, 'Selecciona una entidad para editar sus medidas aquí.'),
           h('li', null, 'Botón central del ratón: girar · derecho: desplazar.')
         )
       )
     );
     return out;
+  }
+
+  // Formularios de Modificar del croquis (con vista previa en verde)
+  sketchModify(kind) {
+    const sk = this.sketcher;
+    const i = sk.selected;
+    const src = sk.entities[i];
+    if (!src) return toast('Selecciona primero una entidad (herramienta Seleccionar, S).', 'warn');
+    const [cx, cy] = entityCenter(src).map((v) => Math.round(v * 1e4) / 1e4);
+    const keep = { key: 'keep', label: 'Conservar el original', type: 'check', value: true };
+    const center = (label) => [
+      { key: 'about', label, type: 'select', value: 'entity', options: [['entity', 'Centro de la entidad'], ['origin', 'Origen (0,0)'], ['custom', 'Otro punto…']] },
+      { key: 'px', label: 'Centro X', type: 'number', value: cx, unit: 'mm', show: (v) => v.about === 'custom' },
+      { key: 'py', label: 'Centro Y', type: 'number', value: cy, unit: 'mm', show: (v) => v.about === 'custom' },
+    ];
+    const pivot = (v) => (v.about === 'origin' ? [0, 0] : v.about === 'custom' ? [v.px, v.py] : [cx, cy]);
+    const defs = {
+      mirror: {
+        title: 'Simetría',
+        fields: [
+          { key: 'axis', label: 'Eje', type: 'select', value: 'v', options: [['v', 'Vertical (verde)'], ['h', 'Horizontal (rojo)'], ['a', 'Inclinado…']] },
+          { key: 'ang', label: 'Ángulo', type: 'number', value: 45, unit: '°', show: (v) => v.axis === 'a' },
+          { key: 'through', label: 'Pasa por', type: 'select', value: 'origin', options: [['origin', 'Origen (0,0)'], ['entity', 'Centro de la entidad'], ['custom', 'Otro punto…']] },
+          { key: 'px', label: 'Punto X', type: 'number', value: 0, unit: 'mm', show: (v) => v.through === 'custom' },
+          { key: 'py', label: 'Punto Y', type: 'number', value: 0, unit: 'mm', show: (v) => v.through === 'custom' },
+          keep,
+        ],
+        run: (v) => {
+          const ang = v.axis === 'v' ? 90 : v.axis === 'h' ? 0 : v.ang;
+          const [px, py] = v.through === 'custom' ? [v.px, v.py] : v.through === 'entity' ? [cx, cy] : [0, 0];
+          return { out: [transformEntity(src, affine.mirror(ang, px, py))], keep: v.keep };
+        },
+      },
+      move: {
+        title: 'Mover / copiar',
+        fields: [
+          { key: 'dx', label: 'Mover en X', type: 'number', value: 20, unit: 'mm' },
+          { key: 'dy', label: 'Mover en Y', type: 'number', value: 0, unit: 'mm' },
+          { ...keep, label: 'Copiar (conservar el original)', value: false },
+        ],
+        run: (v) => ({ out: [transformEntity(src, affine.translate(v.dx, v.dy))], keep: v.keep }),
+      },
+      rotate: {
+        title: 'Girar',
+        fields: [{ key: 'ang', label: 'Ángulo (+ antihorario)', type: 'number', value: 90, unit: '°' }, ...center('Centro de giro'), { ...keep, value: false }],
+        run: (v) => ({ out: [transformEntity(src, affine.rotate(v.ang, ...pivot(v)))], keep: v.keep }),
+      },
+      array: {
+        title: 'Matriz rectangular',
+        fields: [
+          { key: 'cols', label: 'Columnas', type: 'int', value: 3, min: 1, max: 50 },
+          { key: 'rows', label: 'Filas', type: 'int', value: 1, min: 1, max: 50 },
+          { key: 'dx', label: 'Separación X', type: 'number', value: 20, unit: 'mm' },
+          { key: 'dy', label: 'Separación Y', type: 'number', value: 20, unit: 'mm' },
+        ],
+        run: (v) => ({ out: rectArray(src, v.cols, v.rows, v.dx, v.dy), keep: true }),
+      },
+      polar: {
+        title: 'Matriz polar',
+        fields: [
+          { key: 'n', label: 'Número total', type: 'int', value: 6, min: 2, max: 100 },
+          { key: 'total', label: 'Ángulo total', type: 'number', value: 360, unit: '°' },
+          { key: 'about', label: 'Centro', type: 'select', value: 'origin', options: [['origin', 'Origen (0,0)'], ['custom', 'Otro punto…']] },
+          { key: 'px', label: 'Centro X', type: 'number', value: 0, unit: 'mm', show: (v) => v.about === 'custom' },
+          { key: 'py', label: 'Centro Y', type: 'number', value: 0, unit: 'mm', show: (v) => v.about === 'custom' },
+          { key: 'rot', label: 'Girar las copias', type: 'check', value: true },
+        ],
+        run: (v) => ({ out: polarArray(src, v.n, v.total, ...pivot(v), v.rot), keep: true }),
+      },
+      offset: {
+        title: 'Desfase',
+        fields: [
+          { key: 'd', label: 'Distancia', type: 'number', value: sk.offsetDist, min: 0.001, unit: 'mm' },
+          { key: 'side', label: 'Lado', type: 'select', value: 'out', options: [['out', 'Hacia fuera'], ['in', 'Hacia dentro'], ['both', 'Ambos lados']] },
+        ],
+        run: (v) => {
+          sk.offsetDist = v.d;
+          const out = [v.side !== 'in' && offsetEntity(src, v.d), v.side !== 'out' && offsetEntity(src, -v.d)].filter(Boolean);
+          return { out, keep: true, error: out.length ? null : 'No cabe un desfase de esa distancia.' };
+        },
+      },
+      fillet: {
+        title: 'Redondear esquinas',
+        fields: [{ key: 'r', label: 'Radio', type: 'number', value: sk.filletR, min: 0.001, unit: 'mm' }],
+        run: (v) => {
+          sk.filletR = v.r;
+          const e = cornerOp(src, 'all', 'fillet', v.r, 32);
+          return { out: e ? [e] : [], keep: false, error: e ? null : 'El radio es demasiado grande para estas esquinas.' };
+        },
+      },
+      chamfer: {
+        title: 'Chaflán en esquinas',
+        fields: [{ key: 'd', label: 'Distancia', type: 'number', value: sk.chamferD, min: 0.001, unit: 'mm' }],
+        run: (v) => {
+          sk.chamferD = v.d;
+          const e = cornerOp(src, 'all', 'chamfer', v.d);
+          return { out: e ? [e] : [], keep: false, error: e ? null : 'La distancia es demasiado grande para estas esquinas.' };
+        },
+      },
+    };
+    const def = defs[kind];
+    this.openForm({
+      title: def.title,
+      icon: { array: 'pattern-lin', polar: 'pattern-circ' }[kind] || kind,
+      fields: def.fields,
+      onChange: (v) => {
+        const r = def.run(v);
+        sk.setGhost(r.out);
+        return r.error || null;
+      },
+      onOk: (v) => {
+        const r = def.run(v);
+        if (!r.out.length) return toast(r.error || 'No hay nada que crear', 'warn');
+        if (r.keep) sk.applyEdit(-1, null, r.out);
+        else sk.applyEdit(i, r.out[0], r.out.slice(1));
+        this.closeForm();
+      },
+    });
   }
 
   // ---------------------------------------------------------------- campos
@@ -2225,6 +2434,7 @@ export class App {
     if (!this.featureForm) return;
     this.featureForm = null;
     this.clearPreview();
+    if (this.sketcher.active) this.sketcher.setGhost(null);
     this.renderProps();
     this.attachGizmo();
     this.sketcher.active && this.sketcher.updateHud();
@@ -2327,7 +2537,7 @@ export class App {
         { class: 'modal' },
         h('div', { class: 'modal-head' }, h('b', null, title), h('button', { class: 'ghost', onclick: () => this.closeModal(), html: icon('x', 18) })),
         h('div', { class: 'modal-body' }, body),
-        h(
+        !buttons.length ? null : h(
           'div',
           { class: 'modal-foot' },
           buttons.map((b) =>
@@ -2429,9 +2639,59 @@ export class App {
       k('Esc', 'Cancelar / deseleccionar'),
       h('h4', null, 'Croquis'),
       k('L R T C P O', 'Polilínea, Rectángulo, Rect. centrado, Círculo, Polígono, Ranura'),
+      k('E F H', 'Desfase, Empalme, Chaflán'),
       k('S', 'Seleccionar entidades'),
       k('Números', 'Mientras dibujas: medida exacta (ej. "40x20", "15", "30<45")'),
+      k('F8', 'Orto: líneas sólo horizontales o verticales'),
+      k('D', 'Mostrar u ocultar las cotas'),
       k('Enter', 'Cerrar polilínea'),
+      h('h4', null, 'Coordenadas (como en AutoCAD)'),
+      k('30,20', 'Punto absoluto: X = 30, Y = 20 desde el origen'),
+      k('@40,0', 'Relativo: 40 en X y 0 en Y desde el último punto'),
+      k('@50<30', 'Polar: 50 mm con un ángulo de 30° desde el último punto'),
+      k('25', 'Longitud en la dirección del ratón (con Orto, recta)'),
+      h('p', { class: 'muted small' }, 'La coma separa coordenadas; los decimales se escriben con punto (12.5).'),
+      h('h4', null, 'Si vienes de AutoCAD'),
+      h(
+        'table',
+        { class: 'cmdtable' },
+        h('tr', null, h('th', null, 'AutoCAD'), h('th', null, 'MiniCAD')),
+        [
+          ['LINEA / POL', 'Polilínea (L)'],
+          ['RECTANG', 'Rectángulo (R) / Rect. centrado (T)'],
+          ['CIRCULO', 'Círculo (C)'],
+          ['POLIGONO', 'Polígono (P)'],
+          ['DESFASE (OFFSET)', 'Desfase (E)'],
+          ['EMPALME (FILLET)', 'Empalme (F)'],
+          ['CHAFLAN', 'Chaflán (H)'],
+          ['SIMETRIA', 'Simetría'],
+          ['DESPLAZA / COPIA', 'Mover / copiar'],
+          ['GIRA', 'Girar'],
+          ['MATRIZ', 'Matriz / Matriz polar'],
+          ['BORRA', 'Supr'],
+          ['ORTO (F8)', 'Orto (F8)'],
+          ['REFENT (F3)', 'Ajuste automático a extremos, puntos medios y centros'],
+          ['ACOTAR', 'Cotas (D) y medidas en el panel derecho'],
+          ['EXTRUSION', 'Extruir'],
+          ['REVOLUCION', 'Revolución'],
+          ['UNION / DIFERENCIA', 'Unir / Restar'],
+        ].map(([a, b]) => h('tr', null, h('td', null, a), h('td', null, b)))
+      ),
+      h('h4', null, 'Conceptos básicos'),
+      h(
+        'dl',
+        { class: 'glossary' },
+        [
+          ['Croquis', 'Dibujo 2D sobre un plano. Sus perfiles cerrados se convierten en sólidos.'],
+          ['Plano', 'Superficie plana donde dibujas: Alzado (frente), Planta (suelo), Perfil (lado) o la cara de un sólido.'],
+          ['Perfil cerrado', 'Contorno sin huecos. Un perfil dentro de otro forma un agujero.'],
+          ['Extruir', 'Da espesor a un perfil, como una galleta cortada con molde.'],
+          ['Revolución', 'Gira un perfil alrededor de un eje (piezas de torno: ejes, poleas, vasos).'],
+          ['Operaciones booleanas', 'Unir, restar o quedarse con la parte común de dos sólidos.'],
+          ['Paramétrico', 'Las medidas se pueden cambiar después y el modelo se recalcula.'],
+          ['Cota', 'Medida que se muestra sobre el dibujo.'],
+        ].map(([a, b]) => [h('dt', null, a), h('dd', null, b)])
+      ),
       h('h4', null, 'Consejos'),
       h(
         'ul',
@@ -2442,7 +2702,27 @@ export class App {
         h('li', null, 'Para ahorrar memoria baja la calidad de curvas en Opciones.')
       )
     );
-    this.showModal('Ayuda de MiniCAD', body);
+    this.showModal('Ayuda de MiniCAD', body, [
+      { label: 'Tutorial de inicio', action: () => this.tutorial.start() },
+      { label: 'Cerrar', primary: true },
+    ]);
+  }
+
+  // Pantalla de bienvenida (sólo la primera vez)
+  showWelcome() {
+    storageSet('minicad.welcome', true);
+    if (this.modal || this.tutorial.active) return;
+    const choice = (ic, title, text, fn) =>
+      h('button', { class: 'choice', onclick: () => { this.closeModal(); fn(); } }, h('span', { html: icon(ic, 26) }), h('span', null, h('b', null, title), h('small', null, text)));
+    const body = h(
+      'div',
+      { class: 'welcome' },
+      h('p', null, 'MiniCAD es un modelador 3D ligero para aprender CAD y crear piezas para impresión 3D, sin instalar nada.'),
+      choice('school', 'Tutorial guiado', 'Modela tu primera pieza paso a paso (5 min).', () => this.tutorial.start()),
+      choice('open', 'Ver un modelo de ejemplo', 'Un soporte con nervios, una polea y un eje.', () => this.loadDemo(true)),
+      choice('new', 'Empezar en blanco', 'Pulsa Croquis (K) para empezar a dibujar.', () => {})
+    );
+    this.showModal('Bienvenido a MiniCAD 3D', body, []);
   }
 
   // =====================================================================
