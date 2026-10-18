@@ -11,7 +11,7 @@ import { exportSTL, exportOBJ, importMeshFile } from './io.js';
 import { icon } from './icons.js';
 import { h, evalNum, fmt, toast, debounce, storageGet, storageSet, downloadBlob, pickFile, DEG } from './util.js';
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 
 const DEFAULTS = {
   theme: 'light',
