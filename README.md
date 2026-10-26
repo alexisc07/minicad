@@ -52,6 +52,27 @@ La pestaña completa del navegador suele ocupar entre 150 y 300 MB.
 | **Archivos** | Guardar y abrir proyectos `.mcad`, exportar a STL (impresión 3D) y OBJ, importar STL, OBJ y DXF (planos de AutoCAD), y exportar el croquis a DXF. |
 | **Otros** | Deshacer y rehacer, autoguardado, tema claro u oscuro, vistas estándar y proyección en perspectiva u ortogonal. |
 
+## Electrónica y mecatrónica
+
+![Simulación de un motor DC con transistor y rueda acoplada](docs/mecatronica.png)
+
+Diseña la parte mecánica y la electrónica en el mismo modelo, y simúlalas juntas:
+
+| Área | Funciones |
+|---|---|
+| **Componentes** | Arduino UNO, LED (5 colores), resistencia (con bandas de color), pulsador, interruptor, potenciómetro, sensor de luz (LDR), zumbador, sensor ultrasónico HC-SR04, batería, servo SG90, motor DC, transistor NPN (2N2222 / TIP120) y diodo. |
+| **Cables** | Herramienta Cable: clic en un pin y luego en otro. Muestra el nombre de cada pin y elige el color según la función (rojo 5V, negro GND). |
+| **Programa** | Editor con resaltado de sintaxis para escribir en **lenguaje Arduino** (C++): `pinMode`, `digitalWrite`, `analogRead`, `analogWrite` (PWM), `delay`, `millis`, `Serial`, `Servo`, `tone`, `pulseIn`, `map`… Los errores indican la línea. |
+| **Simulación** | Resuelve el circuito en tiempo real (tensiones y corrientes): los LED brillan según su corriente, los servos y motores giran, el zumbador suena y el ultrasonido mide la distancia real a las piezas 3D. |
+| **Mecánica** | **Acopla** cualquier pieza al brazo de un servo o al eje de un motor y se moverá con él. Puedes encadenar servos para hacer un brazo robótico. |
+| **Aprendizaje** | Avisa si un LED se quema por falta de resistencia, si un pin del Arduino da más de 40 mA o si hay un cortocircuito. |
+| **Ejemplos** | Parpadeo, semáforo, botón, servo, potenciómetro + servo, sensor de distancia, motor con transistor, luz nocturna y melodía. |
+
+Cómo empezar: pestaña **Electrónica** → **Ejemplos**, y pulsa **Simular** (o la tecla F5).
+También puedes abrir un ejemplo directamente con `MiniCAD.html#ejemplo=servo` (o `blink`, `semaforo`, `boton`, `potservo`, `ultrasonido`, `motor`, `luz`, `melodia`).
+
+> El simulador es educativo: usa modelos eléctricos simplificados (corriente continua, PWM promediado) y ejecuta el código Arduino traduciéndolo a JavaScript. No sustituye a la placa real, pero se comporta igual en los montajes habituales.
+
 ## Flujo de trabajo básico (como en SolidWorks)
 
 1. **Croquis**: elige un plano (Alzado, Planta, Perfil) o haz clic sobre una cara de un sólido.

@@ -39,6 +39,7 @@ export class SceneSync {
   }
 
   geometryFor(node) {
+    if (node.type === 'ecomp') return EMPTY;
     try {
       const g = getGeometry(node, this.ctx());
       this.errors.delete(node.id);
@@ -55,6 +56,7 @@ export class SceneSync {
     const seen = new Set();
     const t0 = performance.now();
     for (const node of doc.nodes) {
+      if (node.type === 'ecomp') continue;
       seen.add(node.id);
       let mesh = this.meshes.get(node.id);
       if (!mesh) {
@@ -89,6 +91,7 @@ export class SceneSync {
         this.meshes.delete(id);
       }
     }
+    this.app.elec?.sync();
     this.viewer.world.updateMatrixWorld(true);
     this.applyDisplay();
     this.applyHighlight();
@@ -180,12 +183,14 @@ export class SceneSync {
       if (on && edges.geometry === EMPTY && mesh.geometry !== EMPTY) edges.geometry = edgesOf(mesh.geometry);
       else if (!on && this.app.settings.display === 'shaded') edges.geometry = EMPTY;
     }
+    this.app.elec?.layer.updateSelection();
     this.viewer.requestRender();
   }
 
   setHover(id) {
     if (this.hoverId === id) return;
     this.hoverId = id;
+    this.app.elec?.layer.setHover(id);
     this.applyHighlight();
   }
 
@@ -199,7 +204,13 @@ export class SceneSync {
       }
       out.push(m);
     }
+    if (this.app.elec) out.push(...this.app.elec.pickables());
     return out;
+  }
+
+  // Objeto 3D de un nodo de nivel superior (malla o grupo de componente)
+  objectFor(id) {
+    return this.meshes.get(id) || this.app.elec?.objectFor(id) || null;
   }
 
   // Matriz del nodo en coordenadas del mundo (considerando sus padres)
@@ -221,6 +232,7 @@ export class SceneSync {
   worldBox(id) {
     const node = this.app.doc.get(id);
     if (!node) return new THREE.Box3();
+    if (node.type === 'ecomp') return this.app.elec.worldBox(id);
     const g = this.geometryFor(node);
     if (!g.boundingBox) g.computeBoundingBox();
     return g.boundingBox.clone().applyMatrix4(this.worldMatrix(id));

@@ -6,10 +6,12 @@ import { Sketcher, SKETCH_TOOLS, entitiesToDXF, dxfToEntities } from './sketch.j
 import { Doc, History, PALETTE } from './model.js';
 import { TYPES, OPS, defaultParams, nodeMatrix, setNodeMatrix, massProps, clearGeometryCache, buildRegions } from './geometry.js';
 import { exportSTL, exportOBJ, importMeshFile } from './io.js';
+import { Electronics, BLANK_CODE } from './elec/index.js';
+import { PARTS } from './elec/parts.js';
 import { icon } from './icons.js';
 import { h, evalNum, fmt, toast, debounce, storageGet, storageSet, downloadBlob, pickFile, DEG } from './util.js';
 
-const VERSION = '1.0';
+const VERSION = '1.1';
 
 const DEFAULTS = {
   theme: 'light',
@@ -88,6 +90,7 @@ export class App {
     this.buildLayout();
     this.viewer = new Viewer(this.el.viewport, this.settings);
     this.sync = new SceneSync(this);
+    this.elec = new Electronics(this);
     this.sketcher = new Sketcher(this);
     if (this.settings.ortho) this.viewer.setProjection(true);
     this.previewGroup = new THREE.Group();
@@ -103,8 +106,12 @@ export class App {
     this.restoreAutosave();
     this.renderRibbon();
     this.refresh();
+    const ex = /^#ejemplo=(\w+)(&simular)?/.exec(location.hash);
     if (location.hash === '#demo') this.loadDemo(false);
-    else this.viewer.setView('iso');
+    else if (ex) {
+      this.doc.reset();
+      this.elec.loadExample(ex[1]).then(() => ex[2] && this.elec.toggleSim());
+    } else this.viewer.setView('iso');
     setInterval(() => this.updateMemory(), 3000);
     this.updateMemory();
     this.setHint();
@@ -289,6 +296,7 @@ export class App {
           { label: 'Sección', items: [T('section', 'Sección', 'Cortar la vista con un plano', () => this.toggleSection(), { active: !!this.sectionState })] },
         ],
       },
+      electronica: this.elec.ribbonTab(T),
       vista: this.viewTab(T),
     };
   }
@@ -338,6 +346,7 @@ export class App {
       )
     );
     const tab = def[this.tab];
+    this.el.ribbonBody.classList.toggle('compact', !!tab.compact);
     const groups = tab.groups.map((g) =>
       h(
         'div',
@@ -425,6 +434,7 @@ export class App {
       place: 'Clic en la rejilla o sobre una cara para colocar · Mayús+clic: colocar varios · Esc: cancelar',
       pickPlane: 'Elige un plano (Alzado, Planta, Perfil) o haz clic sobre una cara plana de un sólido · Esc: cancelar',
       measure: 'Clic en dos puntos para medir (se ajusta a los vértices) · Esc: terminar',
+      wire: 'Cable: clic en un pin y después en otro · Esc: cancelar',
       sketch: SKETCH_TOOLS[this.sketcher?.tool]?.hint + ' · Botón central: girar · Botón derecho: desplazar',
     };
     this.el.hint.textContent = text || defaults[this.mode] || '';
@@ -518,6 +528,7 @@ export class App {
       if (i >= 0) this.selection.splice(i, 1);
       else this.selection.push(id);
     } else this.selection = [id];
+    if (id) this.elec.layer.selectWire(null);
     // Expande los padres en el árbol
     for (const sid of this.selection) {
       const f = this.doc.find(sid);
@@ -579,6 +590,9 @@ export class App {
       case 'place':
         this.updatePlaceGhost(e);
         return;
+      case 'wire':
+        if (!busy) this.elec.wireHover(e);
+        return;
       case 'pickPlane': {
         const hit = this.pickBody(e);
         const ph = hit ? null : this.viewer.pick(e, this.viewer.planes.children.map((g) => g.userData.quad));
@@ -625,10 +639,20 @@ export class App {
         return this.pickPlaneAt(e);
       case 'measure':
         return this.measureClick(e);
+      case 'wire':
+        return this.elec.wireClick(e);
       default: {
         if (this.featureForm) return;
         const hit = this.pickBody(e);
         const add = e.ctrlKey || e.shiftKey || e.metaKey;
+        const wireHit = this.viewer.pick(e, [...this.elec.layer.wireMeshes.values()]);
+        if (wireHit && (!hit || wireHit.distance < hit.distance)) {
+          this.selection = [];
+          this.elec.layer.selectWire(wireHit.object.userData.wireId);
+          this.select(undefined);
+          return;
+        }
+        if (this.elec.layer.selectedWire) this.elec.layer.selectWire(null);
         if (hit) this.select(hit.object.userData.nodeId, add);
         else if (!add) this.select(null);
       }
@@ -764,7 +788,7 @@ export class App {
         this._tcTargets = [{ node, mesh: ghost }];
         tc.attach(ghost);
       } else {
-        const mesh = this.sync.meshes.get(node.id);
+        const mesh = this.sync.objectFor(node.id);
         if (!mesh || !mesh.visible) return;
         this._tcTargets = [{ node, mesh }];
         tc.attach(mesh);
@@ -774,7 +798,7 @@ export class App {
       const box = new THREE.Box3();
       const targets = [];
       for (const n of tops) {
-        const mesh = this.sync.meshes.get(n.id);
+        const mesh = this.sync.objectFor(n.id);
         if (mesh && mesh.visible) {
           targets.push({ node: n, mesh });
           box.union(this.sync.worldBox(n.id));
@@ -802,6 +826,10 @@ export class App {
       if (e.key === 'F1') {
         e.preventDefault();
         return this.openHelp();
+      }
+      if (e.key === 'F5' && !this.modal) {
+        e.preventDefault();
+        return this.elec.toggleSim();
       }
       if (typing) return;
       if (this.modal) {
@@ -862,11 +890,16 @@ export class App {
       if (ctrl) return;
       switch (e.key) {
         case 'Escape':
+          if (this.mode === 'wire' && this.elec.wireEscape()) return;
           if (this.mode !== 'select') this.cancelMode();
-          else this.select(null);
+          else {
+            this.elec.layer.selectWire(null);
+            this.select(null);
+          }
           return;
         case 'Delete':
         case 'Backspace':
+          if (!this.selection.length && this.elec.layer.selectedWire) return this.elec.deleteWire(this.elec.layer.selectedWire);
           return this.deleteSelected();
       }
       switch (k) {
@@ -902,6 +935,7 @@ export class App {
       this.el.banner.style.display = 'none';
     }
     if (m === 'measure') this.endMeasure();
+    if (m === 'wire') this.elec.layer.clearWireTool();
     this.sync.setHover(null);
     this.mode = 'select';
     this.setHint();
@@ -913,11 +947,21 @@ export class App {
   // =====================================================================
   // Colocar sólidos básicos
   // =====================================================================
-  startPlace(type) {
+  startPlace(type, part = null) {
     if (this.mode !== 'select') this.cancelMode();
     this.mode = 'place';
     this.placeType = type;
+    this.placePart = part;
     this.attachGizmo();
+    if (part) {
+      const ghost = this.elec.ghost(part);
+      ghost.visible = false;
+      this.placeGhost = ghost;
+      this.viewer.overlay.add(ghost);
+      this.setHint();
+      this.renderRibbon();
+      return;
+    }
     const tmp = { id: '__place', type, params: defaultParams(type) };
     const g = this.sync.geometryFor(tmp);
     const ghost = new THREE.Mesh(g, new THREE.MeshPhongMaterial({ color: 0x3fae6a, transparent: true, opacity: 0.55, depthWrite: false }));
@@ -933,7 +977,7 @@ export class App {
   clearPlaceGhost() {
     if (this.placeGhost) {
       this.viewer.overlay.remove(this.placeGhost);
-      this.placeGhost.material.dispose();
+      this.placeGhost.material?.dispose();
       this.placeGhost = null;
     }
   }
@@ -964,7 +1008,8 @@ export class App {
     this.updatePlaceGhost(e);
     const g = this.placeGhost;
     if (!g || !g.visible) return;
-    const node = this.doc.makeNode(this.placeType);
+    const node = this.placePart ? this.elec.makeNode(this.placePart) : this.doc.makeNode(this.placeType);
+    if (this.placePart === 'arduino' && !this.doc.code?.trim()) this.doc.code = BLANK_CODE;
     node.pos = [g.position.x, g.position.y, g.position.z].map((v) => Math.round(v * 1e4) / 1e4);
     this.doc.nodes.push(node);
     if (!e.shiftKey) {
@@ -973,7 +1018,7 @@ export class App {
       this.setHint();
     }
     this.selection = [node.id];
-    this.commit('Crear ' + TYPES[node.type].label);
+    this.commit('Crear ' + (node.type === 'ecomp' ? PARTS[node.part].label : TYPES[node.type].label));
   }
 
   // =====================================================================
@@ -1219,6 +1264,7 @@ export class App {
   // =====================================================================
   booleanSelected(op) {
     const nodes = this.topSelected();
+    if (nodes.some((n) => n.type === 'ecomp')) return toast('Los componentes electrónicos no se pueden unir ni restar; usa piezas sólidas.', 'warn');
     if (nodes.length < 2) return toast('Selecciona al menos 2 cuerpos (Ctrl+clic)', 'warn');
     const idx = Math.min(...nodes.map((n) => this.doc.nodes.indexOf(n)));
     this.doc.nodes = this.doc.nodes.filter((n) => !nodes.includes(n));
@@ -1253,6 +1299,8 @@ export class App {
   deleteSelected() {
     if (!this.selection.length) return;
     for (const id of [...this.selection]) this.doc.remove(id);
+    for (const n of this.doc.nodes) if (n.mount && !this.doc.get(n.mount.to)) delete n.mount;
+    this.elec.pruneWires();
     this.selection = [];
     this.commit('Eliminar');
   }
@@ -1749,7 +1797,7 @@ export class App {
           const isChild = depth > 0;
           const hidden = isChild ? n.suppressed : n.visible === false;
           const err = this.sync.errors.get(n.id);
-          const ic = n.type === 'boolean' ? OPS[n.op]?.icon : TYPES[n.type]?.icon;
+          const ic = n.type === 'ecomp' ? PARTS[n.part]?.icon : n.type === 'boolean' ? OPS[n.op]?.icon : TYPES[n.type]?.icon;
           rows.push(
             h(
               'div',
@@ -1778,6 +1826,7 @@ export class App {
               }),
               h('span', { class: 'ticon', style: { color: n.color }, html: icon(ic || 'box', 16) }),
               h('span', { class: 'tname' }, n.name),
+              n.mount ? h('span', { class: 'tlink', title: 'Acoplado a ' + (this.doc.get(n.mount.to)?.name || '?'), html: icon('link', 13) }) : null,
               err ? h('span', { class: 'terr', title: err, html: icon('warn', 14) }) : null,
               h('button', {
                 class: 'tbtn eye',
@@ -1862,7 +1911,9 @@ export class App {
     if (this.mode === 'sketch') out.push(...this.sketchProps());
     else {
       const nodes = this.selectedNodes();
-      if (!nodes.length) out.push(...this.docProps());
+      const wp = !nodes.length && this.elec.layer.selectedWire ? this.elec.wireProps(this.elec.layer.selectedWire) : null;
+      if (wp) out.push(...wp);
+      else if (!nodes.length) out.push(...this.docProps());
       else if (nodes.length > 1) out.push(...this.multiProps(nodes));
       else out.push(...this.nodeProps(nodes[0]));
     }
@@ -1886,6 +1937,11 @@ export class App {
         info('Cuerpos', String(n)),
         info('Unidades', 'milímetros (mm)'),
         info('Calidad de curvas', { 24: 'Baja', 48: 'Media', 96: 'Alta' }[this.settings.quality] || this.settings.quality)
+      ),
+      section(
+        'Electrónica y mecatrónica',
+        h('p', { class: 'muted small' }, 'Arduino, servos, motores, sensores y LEDs con simulación en tiempo real. Abre la pestaña Electrónica o empieza con un ejemplo.'),
+        h('button', { class: 'wide', onclick: (e) => this.elec.examplesMenu(e.currentTarget), html: icon('book', 16) + ' Ejemplos de electrónica' })
       ),
       section(
         'Cómo empezar',
@@ -1926,7 +1982,8 @@ export class App {
     const f = this.doc.find(node.id);
     const isChild = f.parents.length > 0;
     const out = [];
-    const typeLabel = node.type === 'boolean' ? OPS[node.op]?.label : TYPES[node.type]?.label;
+    const pinfo = node.type === 'ecomp' ? this.elec.partInfo(node) : null;
+    const typeLabel = pinfo ? pinfo.label : node.type === 'boolean' ? OPS[node.op]?.label : TYPES[node.type]?.label;
     const nameInput = h('input', { class: 'name-input', value: node.name, 'data-key': 'name' });
     nameInput.addEventListener('change', () => {
       if (nameInput.value.trim()) {
@@ -1934,7 +1991,7 @@ export class App {
         this.commit('Renombrar');
       }
     });
-    out.push(h('div', { class: 'ptitle' }, h('span', { style: { color: node.color }, html: icon(node.type === 'boolean' ? OPS[node.op]?.icon : TYPES[node.type]?.icon, 18) }), nameInput));
+    out.push(h('div', { class: 'ptitle' }, h('span', { style: { color: node.color }, html: icon(pinfo ? pinfo.icon : node.type === 'boolean' ? OPS[node.op]?.icon : TYPES[node.type]?.icon, 18) }), nameInput));
     out.push(h('div', { class: 'ptype' }, typeLabel + (isChild ? ` · dentro de "${f.parents[f.parents.length - 1].name}"` : '')));
     const err = this.sync.errors.get(node.id) || (isChild ? null : this.findChildError(node));
     if (err) out.push(h('div', { class: 'perror', html: icon('warn', 16) + ' ' + escapeHtml(err) }));
@@ -2001,6 +2058,11 @@ export class App {
       const g = this.sync.geometryFor(node);
       out.push(section('Malla', info('Triángulos', (g.attributes.position.count / 3).toLocaleString('es')), h('p', { class: 'muted small' }, 'Las mallas importadas se pueden mover, escalar y combinar con otros cuerpos (deben ser cerradas).')));
     }
+    if (node.type === 'ecomp') out.push(...this.elec.propSections(node));
+    if (!isChild) {
+      const ms = this.elec.mountSection(node);
+      if (ms) out.push(ms);
+    }
 
     // Transformación
     const setT = (arr, i, v, label) => {
@@ -2032,7 +2094,7 @@ export class App {
     );
 
     // Apariencia
-    const appearance = [this.colorField([node])];
+    const appearance = node.type === 'ecomp' ? [] : [this.colorField([node])];
     if (isChild) {
       appearance.push(this.checkField('Suprimido en la operación', !!node.suppressed, (v) => { node.suppressed = v; this.commit('Suprimir'); }));
     } else appearance.push(this.checkField('Visible', node.visible !== false, (v) => { node.visible = v; this.commit('Ocultar/mostrar'); }));
@@ -2427,6 +2489,11 @@ export class App {
       k('Ctrl+Z / Ctrl+Y', 'Deshacer / rehacer'),
       k('Ctrl+S', 'Guardar (Ctrl+Mayús+S: guardar como)'),
       k('Esc', 'Cancelar / deseleccionar'),
+      h('h4', null, 'Electrónica'),
+      k('F5', 'Iniciar / detener la simulación'),
+      k('Ctrl+Enter', 'Simular desde el editor de código'),
+      k('Clic', 'En simulación: pulsa botones e interruptores'),
+      k('Arrastrar / rueda', 'En simulación: gira potenciómetros y cambia la luz del LDR'),
       h('h4', null, 'Croquis'),
       k('L R T C P O', 'Polilínea, Rectángulo, Rect. centrado, Círculo, Polígono, Ranura'),
       k('S', 'Seleccionar entidades'),
@@ -2451,6 +2518,7 @@ export class App {
   // Modelo de ejemplo: soporte con nervios y una polea
   async loadDemo(ask = true) {
     if (ask && this.doc.nodes.length && !(await this.confirm('Modelo de ejemplo', 'Se reemplazará el modelo actual. ¿Continuar?', 'Abrir ejemplo'))) return;
+    this.elec.sim.stop();
     if (this.mode !== 'select') this.cancelMode();
     const d = this.doc;
     d.reset();
@@ -2493,6 +2561,7 @@ export class App {
 
   async newDoc() {
     if (this.doc.nodes.length && this.dirty && !(await this.confirm('Nuevo modelo', 'Se perderán los cambios no guardados. ¿Continuar?', 'Nuevo'))) return;
+    this.elec.sim.stop();
     if (this.mode !== 'select') this.cancelMode();
     this.doc.reset();
     this.history.clear();
@@ -2527,6 +2596,7 @@ export class App {
         name = file.name;
         this.fileHandle = null;
       }
+      this.elec.sim.stop();
       if (this.mode !== 'select') this.cancelMode();
       this.doc.fromFile(text);
       this.history.clear();
@@ -2648,7 +2718,8 @@ export class App {
   exportMesh(fmtName) {
     let nodes = this.topSelected();
     if (!nodes.length) nodes = this.doc.nodes.filter((n) => n.visible !== false);
-    if (!nodes.length) return toast('No hay cuerpos visibles para exportar', 'warn');
+    nodes = nodes.filter((n) => n.type !== 'ecomp');
+    if (!nodes.length) return toast('No hay piezas sólidas visibles para exportar', 'warn');
     const items = nodes.map((n) => ({ geometry: this.sync.geometryFor(n), matrix: nodeMatrix(n) }));
     const base = nodes.length === 1 ? nodes[0].name : this.docName;
     const safe = base.replace(/[\\/:*?"<>|]+/g, '_');

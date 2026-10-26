@@ -15,6 +15,8 @@ export class Doc {
     this.counters = {};
     this.meshStore = new Map();
     this.colorIdx = 0;
+    this.wires = [];
+    this.code = '';
   }
 
   newId() {
@@ -103,7 +105,7 @@ export class Doc {
   }
 
   snapshot() {
-    return JSON.stringify({ nodes: this.nodes, nextId: this.nextId, counters: this.counters, colorIdx: this.colorIdx });
+    return JSON.stringify({ nodes: this.nodes, nextId: this.nextId, counters: this.counters, colorIdx: this.colorIdx, wires: this.wires, code: this.code });
   }
 
   restore(snap) {
@@ -112,6 +114,8 @@ export class Doc {
     this.nextId = d.nextId;
     this.counters = d.counters || {};
     this.colorIdx = d.colorIdx || 0;
+    this.wires = d.wires || [];
+    this.code = d.code || '';
   }
 
   // Formato de archivo .mcad
@@ -132,6 +136,8 @@ export class Doc {
     this.nextId = d.nextId || 1;
     this.counters = d.counters || {};
     this.colorIdx = d.colorIdx || 0;
+    this.wires = d.wires || [];
+    this.code = d.code || '';
     for (const [ref, b64] of Object.entries(d.meshes || {})) this.meshStore.set(ref, b64ToF32(b64));
   }
 }
