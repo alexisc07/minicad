@@ -1240,13 +1240,17 @@ kbd {
 
 
 /* ------------------------------------------------------------ electrónica */
+.swatches.wide-sw {
+  max-width: 180px;
+}
+
 .ribbon-body.compact .rgroup {
-  padding: 0 3px;
+  padding: 0 2px;
 }
 
 .ribbon-body.compact .rbtn {
-  min-width: 42px;
-  padding: 5px 3px 3px;
+  min-width: 40px;
+  padding: 5px 2px 3px;
 }
 
 .ribbon-body.compact .rbtn .lbl {

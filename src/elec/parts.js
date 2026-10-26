@@ -2,80 +2,10 @@
 // Unidades: milímetros, eje Y hacia arriba. Los pines se dan en coordenadas
 // locales del componente.
 import * as THREE from 'three';
+import { P, mat, box, cyl, sphere, leg, label, METAL, LEAD, BLACK } from './shapes.js';
+import { buildUno, unoPins, UNO_BRIDGES, PWM_PINS, buildBreadboard, bbPins, bbBridges } from './boards.js';
 
 const DEG = Math.PI / 180;
-const P = 2.54; // paso estándar entre pines
-
-// ---------------------------------------------------------------- utilidades 3D
-const geoCache = new Map();
-function cached(key, make) {
-  let g = geoCache.get(key);
-  if (!g) {
-    g = make();
-    g.computeBoundingBox();
-    geoCache.set(key, g);
-  }
-  return g;
-}
-
-function mat(color, opts = {}) {
-  return new THREE.MeshPhongMaterial({ color, shininess: 40, specular: 0x333333, ...opts });
-}
-
-function box(g, w, h, d, m, x = 0, y = 0, z = 0) {
-  const mesh = new THREE.Mesh(cached(`b${w},${h},${d}`, () => new THREE.BoxGeometry(w, h, d)), m);
-  mesh.position.set(x, y, z);
-  g.add(mesh);
-  return mesh;
-}
-
-function cyl(g, r, h, m, x = 0, y = 0, z = 0, axis = 'y', seg = 24, r2 = r) {
-  const mesh = new THREE.Mesh(cached(`c${r},${r2},${h},${seg}`, () => new THREE.CylinderGeometry(r2, r, h, seg)), m);
-  mesh.position.set(x, y, z);
-  if (axis === 'x') mesh.rotation.z = -Math.PI / 2;
-  if (axis === 'z') mesh.rotation.x = Math.PI / 2;
-  g.add(mesh);
-  return mesh;
-}
-
-function sphere(g, r, m, x = 0, y = 0, z = 0) {
-  const mesh = new THREE.Mesh(cached(`s${r}`, () => new THREE.SphereGeometry(r, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2)), m);
-  mesh.position.set(x, y, z);
-  g.add(mesh);
-  return mesh;
-}
-
-// Patita vertical de un componente (desde y0 hasta y1)
-function leg(g, x, z, y0, y1, m, r = 0.3) {
-  return cyl(g, r, y1 - y0, m, x, (y0 + y1) / 2, z, 'y', 6);
-}
-
-function label(g, text, w, h, x, y, z, opts = {}) {
-  if (typeof document === 'undefined') return null;
-  const cv = document.createElement('canvas');
-  const s = 8;
-  cv.width = Math.round(w * s * 4);
-  cv.height = Math.round(h * s * 4);
-  const c = cv.getContext('2d');
-  c.fillStyle = opts.color || '#ffffff';
-  c.font = `${opts.weight || 'bold'} ${Math.round(cv.height * 0.72)}px "Segoe UI", Arial, sans-serif`;
-  c.textAlign = 'center';
-  c.textBaseline = 'middle';
-  c.fillText(text, cv.width / 2, cv.height / 2 + 1);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }));
-  mesh.position.set(x, y, z);
-  mesh.rotation.x = opts.vertical ? 0 : -Math.PI / 2;
-  if (opts.rotZ) mesh.rotation.z = opts.rotZ;
-  mesh.userData.noPick = true;
-  g.add(mesh);
-  return mesh;
-}
-
-const METAL = () => mat(0xc9ced6, { shininess: 90, specular: 0x888888 });
-const LEAD = () => mat(0xb9bec6, { shininess: 80 });
-const BLACK = () => mat(0x1d1f23, { shininess: 25 });
 
 // Colores de las bandas de una resistencia
 const BAND = ['#111111', '#7a4a1d', '#d42a2a', '#f07c16', '#f2d21b', '#2e9e3e', '#2463d6', '#7b3fbf', '#8a8a8a', '#f4f4f4'];
@@ -101,78 +31,6 @@ const LED_COLORS = {
   blanco: { hex: 0xf4f6ff, vf: 3.0, label: 'Blanco' },
 };
 
-// ---------------------------------------------------------------- Arduino UNO
-const UNO_TOP = ['SCL', 'SDA', 'AREF', 'GND3', 'D13', 'D12', 'D11', 'D10', 'D9', 'D8'];
-const UNO_TOP2 = ['D7', 'D6', 'D5', 'D4', 'D3', 'D2', 'D1', 'D0'];
-const UNO_PWR = ['NC', 'IOREF', 'RESET', '3V3', '5V', 'GND', 'GND2', 'VIN'];
-const UNO_ANA = ['A0', 'A1', 'A2', 'A3', 'A4', 'A5'];
-const PWM_PINS = [3, 5, 6, 9, 10, 11];
-const HEADER_H = 8.5;
-const PCB_T = 1.6;
-
-function unoPins() {
-  const pins = [];
-  const y = PCB_T + HEADER_H;
-  const add = (ids, x0, z) =>
-    ids.forEach((id, i) => {
-      const n = /^D(\d+)$/.exec(id);
-      const lbl = id === 'GND2' || id === 'GND3' ? 'GND' : n && PWM_PINS.includes(+n[1]) ? id + ' ~' : id;
-      pins.push({ id, label: lbl, pos: [x0 + i * P, y, z] });
-    });
-  add(UNO_TOP, -15.5, -24.1);
-  add(UNO_TOP2, -15.5 + 10 * P + 1.5, -24.1);
-  add(UNO_PWR, -11, 24.1);
-  add(UNO_ANA, -11 + 8 * P + 2, 24.1);
-  return pins;
-}
-
-function buildUno() {
-  const g = new THREE.Group();
-  const parts = {};
-  box(g, 68.6, PCB_T, 53.3, mat(0x0a7c8c, { shininess: 30 }), 0, PCB_T / 2, 0);
-  // Conector USB y jack de alimentación
-  box(g, 16, 11, 12, METAL(), -34.3 + 6.5, PCB_T + 5.5, -14);
-  box(g, 14, 11, 9, BLACK(), -34.3 + 5.5, PCB_T + 5.5, 12);
-  // Microcontrolador DIP
-  box(g, 35, 3.5, 9.5, BLACK(), 9, PCB_T + 2.75, 9);
-  for (let i = 0; i < 14; i++) {
-    const x = 9 - 16.5 + i * P;
-    box(g, 0.6, 1.5, 1, LEAD(), x, PCB_T + 1.5, 9 - 5.2);
-    box(g, 0.6, 1.5, 1, LEAD(), x, PCB_T + 1.5, 9 + 5.2);
-  }
-  // Cristal, condensadores, botón de reset
-  box(g, 11, 4, 4.5, METAL(), -14, PCB_T + 2, 2);
-  cyl(g, 3, 6, mat(0x2b2f36), -26, PCB_T + 3, -2);
-  cyl(g, 3, 6, mat(0x2b2f36), -26, PCB_T + 3, 4.5);
-  box(g, 6, 3, 6, METAL(), -28, PCB_T + 1.5, -24);
-  cyl(g, 1.6, 1.4, mat(0xd94a3a), -28, PCB_T + 3.5, -24);
-  // Cabeceras hembra
-  const hdr = BLACK();
-  const header = (n, x0, z) => {
-    const len = n * P;
-    box(g, len, HEADER_H, P, hdr, x0 - P / 2 + len / 2, PCB_T + HEADER_H / 2, z);
-  };
-  header(10, -15.5, -24.1);
-  header(8, -15.5 + 10 * P + 1.5, -24.1);
-  header(8, -11, 24.1);
-  header(6, -11 + 8 * P + 2, 24.1);
-  // LEDs de la placa: L (pin 13), ON, TX, RX
-  const ledL = mat(0x553300, { emissive: 0x000000 });
-  box(g, 2, 0.8, 1.2, ledL, -8, PCB_T + 0.4, -17);
-  parts.ledL = ledL;
-  const ledOn = mat(0x0b3d12, { emissive: 0x000000 });
-  box(g, 2, 0.8, 1.2, ledOn, 22, PCB_T + 0.4, 14);
-  parts.ledOn = ledOn;
-  label(g, 'L', 2.5, 2.5, -8, PCB_T + 0.05, -14.8);
-  label(g, 'ON', 4, 2.5, 22, PCB_T + 0.05, 16.3);
-  label(g, 'ARDUINO', 22, 4.5, 6, PCB_T + 0.05, -6, {});
-  label(g, 'UNO', 12, 5, 24, PCB_T + 0.05, 1, {});
-  label(g, 'DIGITAL (PWM ~)', 26, 2.6, 6, PCB_T + 0.05, -20.6, { weight: '600' });
-  label(g, 'POWER', 12, 2.4, -2, PCB_T + 0.05, 20.6, { weight: '600' });
-  label(g, 'ANALOG IN', 14, 2.4, 18, PCB_T + 0.05, 20.6, { weight: '600' });
-  return { group: g, parts };
-}
-
 // ---------------------------------------------------------------- catálogo
 export const PARTS = {
   arduino: {
@@ -181,9 +39,22 @@ export const PARTS = {
     color: '#0a7c8c',
     params: [],
     pins: unoPins,
-    bridges: [['GND', 'GND2', 'GND3'], ['SDA', 'A4'], ['SCL', 'A5']],
+    bridges: UNO_BRIDGES,
     build: buildUno,
-    info: 'Placa programable. Escribe el programa en el panel "Código" y pulsa Simular.',
+    board: true,
+    info: 'Placa programable. Escribe el programa en el panel "Código" y pulsa Simular. Los LEDs TX/RX parpadean al usar el puerto serie.',
+  },
+
+  breadboard: {
+    label: 'Protoboard',
+    icon: 'breadboard',
+    color: '#d8d4c6',
+    params: [],
+    board: true,
+    pins: bbPins,
+    bridges: bbBridges(),
+    build: buildBreadboard,
+    info: 'Coloca componentes encima: sus patas se conectan solas a los agujeros. Cada columna de 5 agujeros (a–e y f–j) está unida por dentro; las filas + y − de los lados recorren toda la placa.',
   },
 
   led: {
@@ -240,14 +111,14 @@ export const PARTS = {
     params: [],
     interactive: 'press',
     pins: () => [
-      { id: '1', label: 'Pin 1', pos: [-3.75, 0, 0] },
-      { id: '2', label: 'Pin 2', pos: [3.75, 0, 0] },
+      { id: '1', label: 'Pin 1', pos: [-1.5 * P, 0, 0] },
+      { id: '2', label: 'Pin 2', pos: [1.5 * P, 0, 0] },
     ],
     build() {
       const g = new THREE.Group();
       const lm = LEAD();
-      leg(g, -3.75, 0, 0, 1, lm, 0.35);
-      leg(g, 3.75, 0, 0, 1, lm, 0.35);
+      leg(g, -1.5 * P, 0, 0, 1, lm, 0.35);
+      leg(g, 1.5 * P, 0, 0, 1, lm, 0.35);
       box(g, 6, 3.5, 6, BLACK(), 0, 2.75, 0);
       box(g, 6.2, 0.3, 6.2, METAL(), 0, 4.6, 0);
       const cap = new THREE.Group();
@@ -330,14 +201,14 @@ export const PARTS = {
     interactive: 'drag',
     state: () => ({ light: 0.5 }),
     pins: () => [
-      { id: '1', label: 'Pin 1', pos: [-1.5, 0, 0] },
-      { id: '2', label: 'Pin 2', pos: [1.5, 0, 0] },
+      { id: '1', label: 'Pin 1', pos: [-P / 2, 0, 0] },
+      { id: '2', label: 'Pin 2', pos: [P / 2, 0, 0] },
     ],
     build() {
       const g = new THREE.Group();
       const lm = LEAD();
-      leg(g, -1.5, 0, 0, 12, lm);
-      leg(g, 1.5, 0, 0, 12, lm);
+      leg(g, -P / 2, 0, 0, 12, lm);
+      leg(g, P / 2, 0, 0, 12, lm);
       const disk = cyl(g, 2.6, 1.6, mat(0xd8d2c0), 0, 13, 0, 'z');
       disk.rotation.x = Math.PI / 2;
       box(g, 3.6, 0.3, 0.2, mat(0xc9573a), 0, 13, 0.85);
@@ -482,14 +353,14 @@ export const PARTS = {
     color: '#1d1f23',
     params: [['kind', 'Tipo', 'pasivo', 'select', [['pasivo', 'Pasivo (usa tone())'], ['activo', 'Activo (suena con HIGH)']]]],
     pins: () => [
-      { id: '+', label: 'Positivo (+)', pos: [-3.8, 0, 0] },
-      { id: '-', label: 'Negativo (−)', pos: [3.8, 0, 0] },
+      { id: '+', label: 'Positivo (+)', pos: [-1.5 * P, 0, 0] },
+      { id: '-', label: 'Negativo (−)', pos: [1.5 * P, 0, 0] },
     ],
     build() {
       const g = new THREE.Group();
       const lm = LEAD();
-      leg(g, -3.8, 0, 0, 2, lm);
-      leg(g, 3.8, 0, 0, 2, lm);
+      leg(g, -1.5 * P, 0, 0, 2, lm);
+      leg(g, 1.5 * P, 0, 0, 2, lm);
       cyl(g, 6, 7.5, BLACK(), 0, 5.75, 0, 'y', 32);
       cyl(g, 1.2, 0.2, mat(0x0a0a0a), 0, 9.55, 0);
       label(g, '+', 2.5, 2.5, -3.5, 9.52, 2.6);
@@ -556,7 +427,7 @@ export const PARTS = {
   },
 };
 
-export const PART_ORDER = ['arduino', 'led', 'resistor', 'button', 'switch', 'pot', 'ldr', 'servo', 'motor', 'npn', 'diode', 'buzzer', 'ultrasonic', 'battery'];
+export const PART_ORDER = ['arduino', 'breadboard', 'led', 'resistor', 'button', 'switch', 'pot', 'ldr', 'servo', 'motor', 'npn', 'diode', 'buzzer', 'ultrasonic', 'battery'];
 
 export function partDefaults(part) {
   const p = {};

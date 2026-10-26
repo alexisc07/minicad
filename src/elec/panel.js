@@ -278,6 +278,7 @@ export class CodePanel {
       return;
     }
     this.elec.sim.runtime.serialInput(t + '\n');
+    this.elec.sim.rxAt = performance.now();
     this.appendSerial(`> ${t}\n`);
     this.input.value = '';
   }

@@ -13,7 +13,7 @@ import { PARTS } from './elec/parts.js';
 import { icon } from './icons.js';
 import { h, evalNum, fmt, toast, debounce, storageGet, storageSet, downloadBlob, pickFile, DEG } from './util.js';
 
-const VERSION = '1.2';
+const VERSION = '1.3';
 
 const DEFAULTS = {
   theme: 'light',
@@ -705,6 +705,7 @@ export class App {
   }
 
   onDblClick(e) {
+    if (this.elec.onDblClick(e)) return;
     if (this.mode === 'sketch') return this.sketcher.onDblClick(e);
     if (this.mode !== 'select') return;
     const hit = this.pickBody(e);
@@ -777,6 +778,7 @@ export class App {
       if (!this._tcTargets) return;
       for (const t of this._tcTargets) {
         t.mesh.updateMatrix();
+        if (t.node.type === 'ecomp' && !PARTS[t.node.part]?.board) this.elec.layer.snapToBoard(t.mesh, t.mesh.userData.pins, t.node.id);
         setNodeMatrix(t.node, t.mesh.matrix);
       }
       const label = { translate: 'Mover', rotate: 'Rotar', scale: 'Escalar' }[tc.mode];
@@ -953,6 +955,7 @@ export class App {
           return;
         case 'Delete':
         case 'Backspace':
+          if (this.mode === 'wire') return this.elec.wireUndoPoint();
           if (!this.selection.length && this.elec.layer.selectedWire) return this.elec.deleteWire(this.elec.layer.selectedWire);
           return this.deleteSelected();
       }
@@ -1053,6 +1056,8 @@ export class App {
       p.z = Math.round(p.z / s) * s;
     }
     g.position.set(p.x, p.y - g.userData.minY, p.z);
+    // Los componentes encajan en los agujeros de la protoboard
+    if (g.userData.pins) this.elec.layer.snapToBoard(g, g.userData.pins);
     g.visible = true;
     this.setCoords(`X ${fmt(p.x, 1)}  Y ${fmt(p.y, 1)}  Z ${fmt(p.z, 1)}`);
     this.viewer.requestRender();
@@ -2701,6 +2706,10 @@ export class App {
       k('Esc', 'Cancelar / deseleccionar'),
       h('h4', null, 'Electrónica'),
       k('F5', 'Iniciar / detener la simulación'),
+      k('Cable', 'Clic en un pin · clic en el espacio para doblar · clic en otro pin para terminar'),
+      k('Retroceso', 'Mientras dibujas un cable: quita el último doblez'),
+      k('Arrastrar', 'Cable seleccionado: mueve dobleces (Mayús: altura) o reconecta un extremo'),
+      k('Doble clic', 'Sobre un doblez: lo elimina'),
       k('Ctrl+Enter', 'Simular desde el editor de código'),
       k('Clic', 'En simulación: pulsa botones e interruptores'),
       k('Arrastrar / rueda', 'En simulación: gira potenciómetros y cambia la luz del LDR'),

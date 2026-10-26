@@ -2,7 +2,7 @@
 // los cables, el simulador y el panel de código con la aplicación.
 import * as THREE from 'three';
 import { PARTS, PART_ORDER, partDefaults, partPins, formatOhms } from './parts.js';
-import { ElecLayer, autoWireColor, WIRE_COLORS, applyNodeTransform } from './layer.js';
+import { ElecLayer, autoWireColor, WIRE_COLORS, WIRE_STYLES } from './layer.js';
 import { Simulator } from './sim.js';
 import { CodePanel } from './panel.js';
 import { EXAMPLES, BLANK_CODE } from './examples.js';
@@ -104,6 +104,7 @@ export class Electronics {
     });
     const box = new THREE.Box3().setFromObject(group);
     group.userData.minY = box.min.y;
+    group.userData.pins = PARTS[part].board ? null : PARTS[part].pins(node.params);
     return group;
   }
 
@@ -123,7 +124,7 @@ export class Electronics {
       label: 'Electrónica',
       compact: true,
       groups: [
-        { label: 'Placa', items: [comp('arduino')] },
+        { label: 'Placas', items: [comp('arduino'), comp('breadboard')] },
         { label: 'Componentes', items: ['led', 'resistor', 'button', 'switch', 'pot', 'ldr', 'buzzer', 'ultrasonic', 'battery'].map(comp) },
         { label: 'Potencia y movimiento', items: ['servo', 'motor', 'npn', 'diode'].map(comp) },
         {
@@ -216,6 +217,11 @@ export class Electronics {
   }
 
   // ------------------------------------------------------------ cables
+  wireDefaults() {
+    const s = this.app.settings;
+    return { style: s.wireStyle || 'curva', gauge: s.wireGauge || 'normal' };
+  }
+
   startWire() {
     const app = this.app;
     if (app.mode === 'wire') return app.cancelMode();
@@ -223,35 +229,74 @@ export class Electronics {
     if (!this.layer.groups.size) return toast('Primero coloca algún componente', 'warn');
     app.mode = 'wire';
     app.select(null);
+    this.layer.selectWire(null);
     this.layer.setWireStart(null);
-    app.setHint('Cable: clic en un pin y después en otro · Esc: cancelar');
+    app.setHint('Cable: clic en un pin · clic en el espacio para doblarlo · clic en otro pin para terminar · Retroceso: quitar el último doblez · Esc: cancelar');
     app.renderRibbon();
   }
 
+  // Punto para un doblez: sobre la pieza bajo el cursor o en el plano del último punto
+  bendPoint(e) {
+    const d = this.layer.draft;
+    const hit = this.app.pickBody(e);
+    if (hit && hit.face) {
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+      return hit.point.clone().addScaledVector(n, 1.5);
+    }
+    const last = d ? (d.pts.length ? new THREE.Vector3(...d.pts[d.pts.length - 1]) : d.start.world.clone().add(new THREE.Vector3(0, 6, 0))) : new THREE.Vector3();
+    return this.app.viewer.rayPlane(e, new THREE.Plane(new THREE.Vector3(0, 1, 0), -Math.max(0.5, last.y)));
+  }
+
   wireHover(e) {
-    const pin = this.layer.nearestPin(e);
-    const extra = this.layer.wireStart ? (pin ? 'Clic para conectar' : '') : pin ? 'Clic para empezar el cable' : '';
+    const d = this.layer.draft;
+    const pin = this.layer.nearestPin(e, 16, d?.start);
+    const extra = d ? (pin ? 'Clic para conectar aquí' : '') : pin ? 'Clic para empezar el cable' : '';
     this.layer.showPinTip(pin, extra);
-    this.layer.updateRubber(e, pin);
+    if (d) this.layer.updateRubber(pin ? pin.world : this.bendPoint(e));
   }
 
   wireClick(e) {
-    const pin = this.layer.nearestPin(e);
-    if (!pin) return;
-    const start = this.layer.wireStart;
-    if (!start) return this.layer.setWireStart(pin);
-    if (start.n === pin.n && start.p === pin.p) return this.layer.setWireStart(null);
+    const d = this.layer.draft;
+    const pin = this.layer.nearestPin(e, 16, d?.start);
+    if (!d) {
+      if (pin) this.layer.setWireStart(pin);
+      return;
+    }
+    if (!pin) {
+      const p = this.bendPoint(e);
+      if (p) {
+        d.pts.push(p.toArray().map((v) => Math.round(v * 100) / 100));
+        this.layer.updateRubber(p);
+      }
+      return;
+    }
+    const start = d.start;
     const doc = this.app.doc;
     doc.wires ||= [];
     const dup = doc.wires.some((w) => (w.a.n === start.n && w.a.p === start.p && w.b.n === pin.n && w.b.p === pin.p) || (w.b.n === start.n && w.b.p === start.p && w.a.n === pin.n && w.a.p === pin.p));
-    if (!dup) doc.wires.push({ id: doc.newId(), a: { n: start.n, p: start.p }, b: { n: pin.n, p: pin.p }, color: autoWireColor(start.p, pin.p, doc.wires.length) });
+    if (dup) toast('Esos dos pines ya están conectados', 'warn');
+    else {
+      const w = { id: doc.newId(), a: { n: start.n, p: start.p }, b: { n: pin.n, p: pin.p }, color: autoWireColor(start.p, pin.p, doc.wires.length), ...this.wireDefaults() };
+      if (d.pts.length) w.pts = d.pts;
+      doc.wires.push(w);
+    }
     this.layer.setWireStart(null);
     this.app.commit('Cable');
     this.layer.showPinTip(pin, 'Conectado');
   }
 
+  wireUndoPoint() {
+    const d = this.layer.draft;
+    if (!d) return false;
+    if (d.pts.length) d.pts.pop();
+    else this.layer.setWireStart(null);
+    this.layer.rubber.visible = false;
+    this.app.viewer.requestRender();
+    return true;
+  }
+
   wireEscape() {
-    if (this.layer.wireStart) {
+    if (this.layer.draft) {
       this.layer.setWireStart(null);
       return true;
     }
@@ -264,21 +309,152 @@ export class Electronics {
     return `${n?.name || '?'} · ${pin?.label || end.p}`;
   }
 
+  // Edición del cable seleccionado arrastrando sus asas
+  handlePointerDown(e) {
+    const layer = this.layer;
+    const hd = layer.nearestHandle(e);
+    const w = hd && layer.wire(layer.selectedWire);
+    if (!w) return false;
+    const app = this.app, viewer = app.viewer;
+    viewer.controls.enabled = false;
+    app.down = null;
+    const before = JSON.stringify(w);
+    let index = hd.index;
+    let moved = false;
+    if (hd.kind === 'mid') {
+      w.pts = w.pts ? [...w.pts] : [];
+      w.pts.splice(index, 0, hd.pos.toArray());
+    }
+    const rebuild = () => {
+      const a = layer.pinWorld(w.a.n, w.a.p), b = layer.pinWorld(w.b.n, w.b.p);
+      if (a && b) layer.buildWire(w, a, b);
+      layer.updateHandles();
+    };
+    const move = (ev) => {
+      moved = true;
+      if (hd.kind === 'end') {
+        const other = hd.end === 'a' ? w.b : w.a;
+        const pin = layer.nearestPin(ev, 18, other);
+        layer.showPinTip(pin, pin ? 'Suelta para conectar aquí' : '');
+        return;
+      }
+      const cur = new THREE.Vector3(...w.pts[index]);
+      let p;
+      if (ev.shiftKey) {
+        // Mayúsculas: sube o baja el punto
+        const n = new THREE.Vector3().subVectors(viewer.camera.position, cur).setY(0).normalize();
+        p = viewer.rayPlane(ev, new THREE.Plane().setFromNormalAndCoplanarPoint(n.lengthSq() ? n : new THREE.Vector3(0, 0, 1), cur));
+        if (p) p.set(cur.x, Math.max(0.5, p.y), cur.z);
+      } else {
+        p = viewer.rayPlane(ev, new THREE.Plane(new THREE.Vector3(0, 1, 0), -cur.y));
+      }
+      if (!p) return;
+      w.pts[index] = p.toArray().map((v) => Math.round(v * 100) / 100);
+      rebuild();
+    };
+    const up = (ev) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      viewer.controls.enabled = true;
+      if (hd.kind === 'end') {
+        layer.showPinTip(null);
+        const other = hd.end === 'a' ? w.b : w.a;
+        const pin = moved && layer.nearestPin(ev, 18, other);
+        if (pin) {
+          w[hd.end] = { n: pin.n, p: pin.p };
+          app.commit('Reconectar cable');
+        }
+        return;
+      }
+      if (!moved && hd.kind === 'mid') {
+        w.pts.splice(index, 1);
+        if (!w.pts.length) delete w.pts;
+        rebuild();
+        return;
+      }
+      if (JSON.stringify(w) !== before) app.commit('Doblar cable');
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return true;
+  }
+
+  onDblClick(e) {
+    const layer = this.layer;
+    if (this.app.mode === 'wire') return this.wireUndoPoint() || true;
+    if (!layer.selectedWire) return false;
+    const hd = layer.nearestHandle(e);
+    const w = layer.wire(layer.selectedWire);
+    if (!hd || hd.kind !== 'bend' || !w) return false;
+    w.pts.splice(hd.index, 1);
+    if (!w.pts.length) delete w.pts;
+    this.app.commit('Quitar doblez');
+    return true;
+  }
+
   wireProps(id) {
-    const doc = this.app.doc;
-    const w = doc.wires.find((x) => x.id === id);
+    const app = this.app;
+    const w = this.layer.wire(id);
     if (!w) return null;
+    const set = (k, v, label = 'Editar cable') => {
+      if (v === undefined) delete w[k];
+      else w[k] = v;
+      app.commit(label);
+    };
+    const a = this.layer.pinWorld(w.a.n, w.a.p), b = this.layer.pinWorld(w.b.n, w.b.p);
+    const autoL = a && b ? Math.round(Math.min(40, Math.max(6, a.distanceTo(b) * 0.3))) : 10;
+    const liftVal = h('b', null, w.lift != null ? `${Math.round(w.lift)} mm` : `Auto (${autoL} mm)`);
+    const lift = h('input', { type: 'range', min: 2, max: 60, value: Math.round(w.lift ?? autoL) });
+    lift.addEventListener('input', () => {
+      w.lift = +lift.value;
+      liftVal.textContent = `${w.lift} mm`;
+      if (a && b) this.layer.buildWire(w, a, b);
+      this.layer.updateHandles();
+      app.viewer.requestRender();
+    });
+    lift.addEventListener('change', () => app.commit('Altura del cable'));
+    const custom = h('input', { type: 'color', value: w.color, title: 'Color personalizado' });
+    custom.addEventListener('change', () => set('color', custom.value, 'Color del cable'));
+    const n = (w.pts || []).length;
     return [
       h('div', { class: 'ptitle' }, h('span', { style: { color: w.color }, html: icon('cable', 18) }), h('span', null, 'Cable')),
+      section('Conexión', info('Desde', this.wireLabel(w.a)), info('Hasta', this.wireLabel(w.b)), h('p', { class: 'muted small' }, 'Arrastra un extremo (naranja) a otro pin para reconectarlo.')),
       section(
-        'Conexión',
-        info('Desde', this.wireLabel(w.a)),
-        info('Hasta', this.wireLabel(w.b)),
+        'Aspecto',
         h(
           'div',
           { class: 'field' },
           h('span', { class: 'flab' }, 'Color'),
-          h('div', { class: 'swatches' }, WIRE_COLORS.map(([c, l]) => h('button', { class: 'sw' + (c === w.color ? ' on' : ''), style: { background: c }, title: l, onclick: () => { w.color = c; this.app.commit('Color del cable'); } })))
+          h('div', { class: 'swatches wide-sw' }, WIRE_COLORS.map(([c, l]) => h('button', { class: 'sw' + (c === w.color ? ' on' : ''), style: { background: c }, title: l, onclick: () => set('color', c, 'Color del cable') })), custom)
+        ),
+        app.selectField('Forma', w.style || 'curva', Object.entries(WIRE_STYLES), (v) => set('style', v)),
+        app.selectField('Grosor', w.gauge || 'normal', [['fina', 'Fino'], ['normal', 'Normal'], ['gruesa', 'Grueso']], (v) => set('gauge', v)),
+        h('div', { class: 'slider' }, h('div', { class: 'info' }, h('span', null, n ? 'Altura en los pines' : 'Altura del arco'), liftVal), lift),
+        h('div', { class: 'btnrow' }, h('button', { class: 'abtn', onclick: () => set('lift', undefined, 'Altura automática') }, 'Altura automática')),
+        app.checkField('Conectores en los extremos', w.ends !== false, (v) => set('ends', v ? undefined : false))
+      ),
+      section(
+        'Recorrido',
+        info('Dobleces', String(n)),
+        h(
+          'ul',
+          { class: 'tips' },
+          h('li', null, 'Arrastra un punto azul para crear un doblez nuevo.'),
+          h('li', null, 'Arrastra un punto blanco para moverlo; con Mayúsculas lo subes o bajas.'),
+          h('li', null, 'Doble clic en un punto blanco para quitarlo.')
+        ),
+        h(
+          'div',
+          { class: 'btnrow' },
+          h('button', { class: 'abtn', disabled: !n, onclick: () => set('pts', undefined, 'Quitar dobleces') }, 'Quitar dobleces'),
+          h('button', {
+            class: 'abtn',
+            onclick: () => {
+              app.setSetting('wireStyle', w.style || 'curva');
+              app.setSetting('wireGauge', w.gauge || 'normal');
+              toast('Los cables nuevos usarán esta forma y grosor');
+            },
+          }, 'Usar para cables nuevos')
         ),
         h('button', { class: 'wide danger', onclick: () => this.deleteWire(id), html: icon('trash', 16) + ' Eliminar cable' })
       ),
@@ -381,9 +557,9 @@ export class Electronics {
 
     // Conexiones
     const pins = partPins(node);
-    const wires = this.app.doc.wires || [];
+    const wires = [...(this.app.doc.wires || []), ...this.layer.contacts()];
     const rows = pins
-      .filter((p) => node.part !== 'arduino' || wires.some((w) => (w.a.n === node.id && w.a.p === p.id) || (w.b.n === node.id && w.b.p === p.id)))
+      .filter((p) => !def.board || wires.some((w) => (w.a.n === node.id && w.a.p === p.id) || (w.b.n === node.id && w.b.p === p.id)))
       .map((p) => {
         const conns = wires
           .filter((w) => (w.a.n === node.id && w.a.p === p.id) || (w.b.n === node.id && w.b.p === p.id))
@@ -454,6 +630,7 @@ export class Electronics {
   bindInteraction() {
     const cv = this.app.viewer.renderer.domElement;
     cv.addEventListener('pointerdown', (e) => {
+      if (this.app.mode === 'select' && e.button === 0 && this.layer.selectedWire && this.handlePointerDown(e)) return;
       if (!this.sim.running || this.app.mode !== 'select' || e.button !== 0) return;
       const hit = this.app.viewer.pick(e, this.layer.pickables());
       if (!hit) return;
@@ -500,7 +677,7 @@ export class Electronics {
 }
 
 function shortLabel(p) {
-  return { arduino: 'Arduino', ultrasonic: 'Distancia', ldr: 'Luz', npn: 'Transistor', pot: 'Potenc.', servo: 'Servo', battery: 'Batería', switch: 'Interrup.', button: 'Pulsador', resistor: 'Resist.', buzzer: 'Zumbador', motor: 'Motor' }[p] || PARTS[p].label;
+  return { arduino: 'Arduino', breadboard: 'Protoboard', ultrasonic: 'Distancia', ldr: 'Luz', npn: 'Transistor', pot: 'Potenc.', servo: 'Servo', battery: 'Batería', switch: 'Interrup.', button: 'Pulsador', resistor: 'Resist.', buzzer: 'Zumbador', motor: 'Motor' }[p] || PARTS[p].label;
 }
 
 export { BLANK_CODE, PART_ORDER };

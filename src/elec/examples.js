@@ -136,6 +136,42 @@ void loop() {
 `,
   },
   {
+    id: 'protoboard',
+    label: 'Protoboard: botón y LED',
+    build(api) {
+      const ard = api.add('arduino', {}, ARD);
+      const bb = api.add('breadboard', {}, [0, 0, -95]);
+      const col = (c) => (c - 15.5) * 2.54;
+      // Resistencia entre las columnas 6 y 10 (fila c); LED entre la 9 (−) y la 10 (+)
+      api.add('resistor', { r: 220 }, [col(8), 8.5, -95 + 8.89]);
+      api.add('led', { color: 'rojo' }, [col(9.5), 8.5, -95 + 13.97]);
+      // Pulsador entre las columnas 20 y 23 (fila d)
+      api.add('button', {}, [col(21.5), 8.5, -95 + 6.35]);
+      api.wire(ard, 'D13', bb, '6e');
+      api.wire(bb, '9b', bb, 'b-7');
+      api.wire(ard, 'D2', bb, '20a');
+      api.wire(bb, '23a', bb, 'b-19');
+      api.wire(ard, 'GND3', bb, 'b-3');
+    },
+    code: `// Montaje en protoboard: las patas de los componentes se conectan
+// solas a los agujeros. Cada columna de 5 agujeros está unida por dentro
+// y la fila azul (−) de abajo es la tierra (GND).
+// Pulsa el botón durante la simulación para encender el LED.
+const int BOTON = 2;
+const int LED = 13;
+
+void setup() {
+  pinMode(BOTON, INPUT_PULLUP);
+  pinMode(LED, OUTPUT);
+}
+
+void loop() {
+  digitalWrite(LED, digitalRead(BOTON) == LOW ? HIGH : LOW);
+  delay(10);
+}
+`,
+  },
+  {
     id: 'servo',
     label: 'Servo con brazo (barrido)',
     build(api) {

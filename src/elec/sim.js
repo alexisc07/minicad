@@ -99,7 +99,8 @@ export class Simulator {
   rebuild() {
     const comps = this.comps();
     for (const n of comps) if (!this.state.has(n.id)) this.state.set(n.id, { ...(PARTS[n.part].state?.() || {}) });
-    this.nets = buildNets(comps, this.app.doc.wires || []);
+    // Cables + patas insertadas en la protoboard
+    this.nets = buildNets(comps, [...(this.app.doc.wires || []), ...this.layer.contacts()]);
     this.netKey = (id, pin) => this.nets.netOf.get(`${id}:${pin}`);
     const gnd = this.arduino ? this.netKey(this.arduino.id, 'GND') : comps.filter((n) => n.part === 'battery').map((n) => this.netKey(n.id, '-'))[0];
     this.ref = gnd ?? 0;
@@ -294,7 +295,10 @@ export class Simulator {
       speed: () => 1,
       now: () => performance.now() - sim.t0,
       serialBegin: () => {},
-      serialWrite: (s) => sim.emit('serial', s),
+      serialWrite: (s) => {
+        sim.txAt = performance.now();
+        sim.emit('serial', s);
+      },
       pinMode(p, m) {
         sim.pins.mode[p] = m === 1 ? 1 : m === 2 ? 2 : 0;
         if (m !== 1) sim.pins.pwm[p] = null;
@@ -503,6 +507,8 @@ export class Simulator {
           parts.ledOn.emissive.setHex(0x22ff44);
           const on13 = this.pins.mode[13] === 1 && (this.pins.out[13] || (this.pins.pwm[13] ?? 0) > 0.5);
           parts.ledL.emissive.setHex(on13 ? 0xffb020 : 0x000000);
+          parts.ledTX?.emissive.setHex(now - (this.txAt || 0) < 70 ? 0xffb020 : 0x000000);
+          parts.ledRX?.emissive.setHex(now - (this.rxAt || 0) < 70 ? 0xffb020 : 0x000000);
           break;
         }
         case 'servo': {
