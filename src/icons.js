@@ -93,6 +93,12 @@ const P = {
   book: 'M4 4h6a2 2 0 0 1 2 2v14a2 2 0 0 0-2-2H4z M20 4h-6a2 2 0 0 0-2 2v14a2 2 0 0 1 2-2h6z',
   warn: 'M12 3L2 20h20z M12 10v4 M12 17v.01',
   clear: 'M4 20h16 M7 16L17 6 M14 4l6 6',
+  offset: 'M7 7h10v10H7z M3 3h18v18H3z',
+  fillet: 'M4 20V12a8 8 0 0 1 8-8h8 M4 4h4 M4 4v4',
+  chamfer: 'M4 20v-9l7-7h9 M4 4h4 M4 4v4',
+  ortho2d: 'M5 19V5 M5 19h14 M5 5l-2 3 M5 5l2 3 M19 19l-3-2 M19 19l-3 2',
+  dims: 'M3 8v8 M21 8v8 M3 12h18 M3 12l3-2 M3 12l3 2 M21 12l-3-2 M21 12l-3 2',
+  school: 'M2 9l10-5 10 5-10 5z M6 11v5c0 1.5 2.7 3 6 3s6-1.5 6-3v-5 M22 9v6',
 };
 
 export function icon(name, size = 20) {

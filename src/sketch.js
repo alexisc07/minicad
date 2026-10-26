@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { entityContour, buildRegions, polySelfIntersects } from './geometry.js';
 import { h, fmt, evalNum, toast, DEG } from './util.js';
+import { parsePoint, offsetEntity, cornerOp, cornerPoints, entityDims } from './sketchops.js';
 
 const COL = { ent: 0x1f5fd6, sel: 0xf08a24, hover: 0x2fa0ff, prev: 0x0f9d58 };
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
@@ -15,7 +16,15 @@ export const SKETCH_TOOLS = {
   circle: { label: 'Círculo', key: 'C', hint: 'Clic en el centro y luego define el radio. Escribe el radio para un valor exacto.' },
   ngon: { label: 'Polígono', key: 'P', hint: 'Clic en el centro y luego en un vértice. Escribe el radio.' },
   slot: { label: 'Ranura', key: 'O', hint: 'Clic en el centro de un extremo, luego en el otro y define el radio.' },
+  offset: { label: 'Desfase', key: 'E', hint: 'Clic en una entidad y luego en el lado hacia el que copiarla. Escribe un número para cambiar la distancia.' },
+  fillet: { label: 'Empalme', key: 'F', hint: 'Clic en una esquina para redondearla. Escribe un número para cambiar el radio.' },
+  chamfer: { label: 'Chaflán', key: 'H', hint: 'Clic en una esquina para cortarla en bisel. Escribe un número para cambiar la distancia.' },
 };
+
+// Herramientas que dibujan entidades nuevas a partir de puntos
+const DRAW_TOOLS = ['line', 'rect', 'rectc', 'circle', 'ngon', 'slot'];
+// Herramientas que modifican entidades existentes con un valor (distancia o radio)
+const VALUE_TOOLS = { offset: 'offsetDist', fillet: 'filletR', chamfer: 'chamferD' };
 
 export class Sketcher {
   constructor(app) {
@@ -23,6 +32,9 @@ export class Sketcher {
     this.viewer = app.viewer;
     this.active = false;
     this.ngonSides = 6;
+    this.offsetDist = 5;
+    this.filletR = 5;
+    this.chamferD = 3;
     this.viewer.addEventListener('render', () => this.active && this.updateHud());
   }
 
@@ -38,6 +50,9 @@ export class Sketcher {
     this.hover = -1;
     this.pts = [];
     this.cursor = null;
+    this.offsetSrc = -1;
+    this.corner = null;
+    this.ghost = null;
     this.tool = this.entities.length ? 'select' : 'rect';
 
     const m = new THREE.Matrix4().makeBasis(plane.x, plane.y, plane.n).setPosition(plane.o);
@@ -64,7 +79,8 @@ export class Sketcher {
     this.label = h('div', { class: 'dim-label' });
     this.input = h('input', { class: 'dim-input', type: 'text', spellcheck: 'false' });
     this.input.addEventListener('keydown', (e) => this.onInputKey(e));
-    vc.append(this.marker, this.label, this.input);
+    this.dimBox = h('div', { class: 'sk-dims' });
+    vc.append(this.dimBox, this.marker, this.label, this.input);
 
     const c = this.viewer.controls;
     c.mouseButtons = { LEFT: -1, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
@@ -97,6 +113,7 @@ export class Sketcher {
     this.marker.remove();
     this.label.remove();
     this.input.remove();
+    this.dimBox.remove();
     this.viewer.controls.mouseButtons = { ...this.viewer.defaultButtons };
     this.viewer.requestRender();
   }
@@ -155,28 +172,40 @@ export class Sketcher {
     return this.viewer.toScreen(this.toWorld(u, v));
   }
 
+  // Puntos de referencia (como las "referencias a objetos" de AutoCAD): [u, v, tipo]
   keyPoints() {
-    const pts = [[0, 0]];
+    const pts = [[0, 0, 'center']];
+    const ends = (l, closed = true) => {
+      for (let i = 0; i < l.length; i++) {
+        pts.push([l[i][0], l[i][1], 'end']);
+        const q = l[(i + 1) % l.length];
+        if (closed || i < l.length - 1) pts.push([(l[i][0] + q[0]) / 2, (l[i][1] + q[1]) / 2, 'mid']);
+      }
+    };
     for (const e of this.entities) {
       switch (e.t) {
         case 'rect':
-          pts.push(...entityContour({ ...e, rr: 0 }), [e.x + e.w / 2, e.y + e.h / 2]);
+          ends(entityContour({ ...e, rr: 0 }));
+          pts.push([e.x + e.w / 2, e.y + e.h / 2, 'center']);
           break;
         case 'circle':
-          pts.push([e.x, e.y], [e.x + e.r, e.y], [e.x - e.r, e.y], [e.x, e.y + e.r], [e.x, e.y - e.r]);
+          pts.push([e.x, e.y, 'center'], [e.x + e.r, e.y, 'end'], [e.x - e.r, e.y, 'end'], [e.x, e.y + e.r, 'end'], [e.x, e.y - e.r, 'end']);
           break;
         case 'ngon':
-          pts.push([e.x, e.y], ...entityContour(e));
+          pts.push([e.x, e.y, 'center']);
+          ends(entityContour(e));
           break;
         case 'slot':
-          pts.push([e.x1, e.y1], [e.x2, e.y2]);
+          pts.push([e.x1, e.y1, 'center'], [e.x2, e.y2, 'center']);
           break;
         case 'poly':
-          pts.push(...e.pts);
+          // Las polilíneas con muchos puntos (arcos de empalme) sólo aportan sus extremos
+          if (e.pts.length > 64) pts.push(...e.pts.map((p) => [p[0], p[1], 'end']));
+          else ends(e.pts);
           break;
       }
     }
-    for (const p of this.pts) pts.push([p.u, p.v]);
+    if (this.pts.length) ends(this.pts.map((p) => [p.u, p.v]), false);
     return pts;
   }
 
@@ -193,18 +222,23 @@ export class Sketcher {
       const d = Math.hypot(s.x - sx, s.y - sy);
       if (d < bd) { bd = d; best = kp; }
     }
-    if (best) return { u: best[0], v: best[1], snap: 'point' };
+    if (best) return { u: best[0], v: best[1], snap: 'point', kind: best[2] };
     // 2) Rejilla
     const step = this.app.settings.sketchSnap;
     let su = step > 0 ? Math.round(u / step) * step : u;
     let sv = step > 0 ? Math.round(v / step) * step : v;
     let snap = step > 0 ? 'grid' : null;
-    // 3) Horizontal / vertical respecto al punto anterior
-    if (this.pts.length && (this.tool === 'line' || this.tool === 'slot')) {
+    // 3) Horizontal / vertical respecto al punto anterior (con Orto siempre)
+    if (this.pts.length && (this.tool === 'line' || (this.tool === 'slot' && this.pts.length === 1))) {
       const last = this.pts[this.pts.length - 1];
-      const ls = this.screenOf(last.u, last.v);
-      if (Math.abs(ls.y - sy) < 8) { sv = last.v; snap = 'H'; }
-      else if (Math.abs(ls.x - sx) < 8) { su = last.u; snap = 'V'; }
+      if (this.app.settings.sketchOrtho) {
+        if (Math.abs(u - last.u) >= Math.abs(v - last.v)) { sv = last.v; snap = 'H'; }
+        else { su = last.u; snap = 'V'; }
+      } else {
+        const ls = this.screenOf(last.u, last.v);
+        if (Math.abs(ls.y - sy) < 8) { sv = last.v; snap = 'H'; }
+        else if (Math.abs(ls.x - sx) < 8) { su = last.u; snap = 'V'; }
+      }
     }
     return { u: r6(su), v: r6(sv), snap };
   }
@@ -214,13 +248,14 @@ export class Sketcher {
     if (this.app.featureForm) return;
     this.cursor = this.cursorFrom(ev);
     this.lastEvent = { clientX: ev.clientX, clientY: ev.clientY };
-    if (this.tool === 'select') {
+    if (this.tool === 'select' || (this.tool === 'offset' && this.offsetSrc < 0)) {
       const i = this.hitEntity(ev);
       if (i !== this.hover) {
         this.hover = i;
         this.redraw();
       }
     }
+    if (this.tool === 'fillet' || this.tool === 'chamfer') this.corner = this.hitCorner(ev);
     this.updatePreview();
   }
 
@@ -233,6 +268,34 @@ export class Sketcher {
       this.selected = this.hitEntity(ev);
       this.redraw();
       this.app.onSketchSelect(this.selected);
+      return;
+    }
+    if (t === 'offset') {
+      if (this.offsetSrc < 0) {
+        this.offsetSrc = this.hitEntity(ev);
+        this.hover = -1;
+        this.redraw();
+        this.updatePreview();
+        return;
+      }
+      const e = this.offsetResult(c);
+      this.offsetSrc = -1;
+      if (e) this.addEntity(e);
+      else {
+        toast('No cabe un desfase de esa distancia hacia ese lado.', 'warn');
+        this.redraw();
+      }
+      return;
+    }
+    if (t === 'fillet' || t === 'chamfer') {
+      const k = this.hitCorner(ev);
+      if (!k) return toast('Haz clic cerca de una esquina.', 'warn');
+      const e = this.cornerResult(k);
+      if (!e) return toast(t === 'fillet' ? 'El radio es demasiado grande para esa esquina.' : 'La distancia es demasiado grande para esa esquina.', 'warn');
+      this.pushUndo();
+      this.entities[k.i] = e;
+      this.corner = null;
+      this.changed();
       return;
     }
     if (t === 'line') {
@@ -279,7 +342,11 @@ export class Sketcher {
     const k = e.key;
     if (k === 'Escape') {
       if (this.input.style.display === 'block') return this.hideInput();
-      if (this.pts.length) {
+      if (this.offsetSrc >= 0) {
+        this.offsetSrc = -1;
+        this.redraw();
+        this.updatePreview();
+      } else if (this.pts.length) {
         this.pts = [];
         this.updatePreview();
       } else if (this.tool !== 'select') this.setTool('select');
@@ -306,8 +373,18 @@ export class Sketcher {
       this.redo();
       return true;
     }
-    if (this.pts.length && /^[0-9.,\-]$/.test(k) && !e.ctrlKey) {
+    if (k === 'F8') {
+      this.app.toggleSketchSetting('sketchOrtho');
+      return true;
+    }
+    // Entrada numérica: medidas, coordenadas (x,y  @dx,dy  d<ángulo) o el valor de la herramienta
+    const typed = k === '@' || (/^[0-9.,\-]$/.test(k) && !e.ctrlKey);
+    if (typed && (this.pts.length || DRAW_TOOLS.includes(this.tool) || VALUE_TOOLS[this.tool])) {
       this.showInput(k);
+      return true;
+    }
+    if (!e.ctrlKey && !e.altKey && k.toLowerCase() === 'd') {
+      this.app.toggleSketchSetting('sketchDims');
       return true;
     }
     if (!e.ctrlKey && !e.altKey) {
@@ -325,6 +402,8 @@ export class Sketcher {
     this.tool = t;
     this.pts = [];
     this.hover = -1;
+    this.offsetSrc = -1;
+    this.corner = null;
     this.hideInput();
     this.updatePreview();
     this.redraw();
@@ -394,6 +473,47 @@ export class Sketcher {
     this.changed();
   }
 
+  // Sustituye la entidad i (si se da) y añade otras nuevas en un solo paso de deshacer
+  applyEdit(i, replacement, added = []) {
+    this.pushUndo();
+    if (i >= 0 && replacement) this.entities[i] = replacement;
+    this.entities.push(...added);
+    this.changed();
+  }
+
+  setGhost(ents) {
+    this.ghost = ents && ents.length ? ents : null;
+    this.updatePreview();
+  }
+
+  // ------------------------------------------------------------ desfase, empalme y chaflán
+  offsetResult(c) {
+    const src = this.entities[this.offsetSrc];
+    if (!src || !c) return null;
+    const inside = pointIn([c.u, c.v], entityContour(src, 64));
+    return offsetEntity(src, inside ? -this.offsetDist : this.offsetDist);
+  }
+
+  hitCorner(ev) {
+    const rect = this.viewer.container.getBoundingClientRect();
+    const sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+    let best = null, bd = 14;
+    this.entities.forEach((e, i) => {
+      cornerPoints(e).forEach((p, index) => {
+        const s = this.screenOf(p[0], p[1]);
+        const d = Math.hypot(s.x - sx, s.y - sy);
+        if (d < bd) { bd = d; best = { i, index, p }; }
+      });
+    });
+    return best;
+  }
+
+  cornerResult(k) {
+    const e = this.entities[k.i];
+    if (!e) return null;
+    return this.tool === 'fillet' ? cornerOp(e, k.index, 'fillet', this.filletR, 32) : cornerOp(e, k.index, 'chamfer', this.chamferD);
+  }
+
   deleteSelected() {
     if (this.selected < 0) return;
     this.pushUndo();
@@ -426,6 +546,7 @@ export class Sketcher {
     else if (key === 'r') e.r = Math.max(0.001, value);
     else if (key === 'd') e.r = Math.max(0.0005, value / 2);
     else if (key === 'rr') e.rr = Math.max(0, value);
+    else if (key === 'w' || key === 'h') e[key] = Math.abs(value) < 1e-6 ? e[key] : value;
     else e[key] = value;
     this.redraw();
   }
@@ -509,7 +630,7 @@ export class Sketcher {
     }
     const pts = [];
     this.entities.forEach((e, i) => {
-      const col = i === this.selected ? COL.sel : i === this.hover ? COL.hover : COL.ent;
+      const col = i === this.selected || i === this.offsetSrc ? COL.sel : i === this.hover ? COL.hover : COL.ent;
       const loop = new THREE.LineLoop(
         new THREE.BufferGeometry().setFromPoints(entityContour(e, 64).map((p) => new THREE.Vector3(p[0], p[1], 0))),
         this.lineMat(col)
@@ -519,7 +640,8 @@ export class Sketcher {
       if (e.t === 'circle' || e.t === 'ngon') pts.push(e.x, e.y, 0);
       if (e.t === 'slot') pts.push(e.x1, e.y1, 0, e.x2, e.y2, 0);
       if (e.t === 'rect') for (const p of entityContour({ ...e, rr: 0 })) pts.push(p[0], p[1], 0);
-      if (e.t === 'poly' || e.t === 'ngon') for (const p of entityContour(e)) pts.push(p[0], p[1], 0);
+      if (e.t === 'ngon') for (const p of entityContour(e)) pts.push(p[0], p[1], 0);
+      if (e.t === 'poly') for (const p of polyCorners(e.pts)) pts.push(p[0], p[1], 0);
     });
     if (pts.length) {
       const g = new THREE.BufferGeometry();
@@ -540,6 +662,23 @@ export class Sketcher {
     P.clear();
     const c = this.cursor;
     let label = '';
+    const drawLoop = (l, color = COL.prev) => {
+      const obj = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(l.map((p) => new THREE.Vector3(p[0], p[1], 0))), this.lineMat(color));
+      obj.renderOrder = 22;
+      P.add(obj);
+    };
+    for (const g of this.ghost || []) drawLoop(entityContour(g, 64));
+    if (this.tool === 'offset') {
+      label = `Desfase ${fmt(this.offsetDist, 2)}`;
+      const e = this.offsetSrc >= 0 && this.offsetResult(c);
+      if (e) drawLoop(entityContour(e, 64));
+    }
+    if ((this.tool === 'fillet' || this.tool === 'chamfer') && c) {
+      label = this.tool === 'fillet' ? `Empalme R ${fmt(this.filletR, 2)}` : `Chaflán ${fmt(this.chamferD, 2)}`;
+      const e = this.corner && this.cornerResult(this.corner);
+      if (e) drawLoop(entityContour(e, 64));
+      else if (this.corner) label += ' (no cabe)';
+    }
     if (c && this.pts.length) {
       const a = this.pts[0];
       let contour = null, open = null;
@@ -594,6 +733,7 @@ export class Sketcher {
   }
 
   updateHud() {
+    this.updateDims();
     const c = this.cursor;
     if (!c || this.app.featureForm) {
       this.marker.style.display = 'none';
@@ -603,7 +743,7 @@ export class Sketcher {
     }
     const s = this.screenOf(c.u, c.v);
     this.marker.style.display = c.snap === 'point' || c.snap === 'H' || c.snap === 'V' ? 'block' : 'none';
-    this.marker.className = 'snap-marker ' + (c.snap || '');
+    this.marker.className = 'snap-marker ' + (c.snap || '') + (c.kind ? ' ' + c.kind : '');
     this.marker.textContent = c.snap === 'H' ? '—' : c.snap === 'V' ? '|' : '';
     this.marker.style.left = s.x + 'px';
     this.marker.style.top = s.y + 'px';
@@ -617,19 +757,58 @@ export class Sketcher {
       this.input.style.left = s.x + 16 + 'px';
       this.input.style.top = s.y + 38 + 'px';
     }
-    this.app.setCoords(`Croquis  X ${fmt(c.u, 2)}  Y ${fmt(c.v, 2)}`);
+    const last = this.pts[this.pts.length - 1];
+    const rel = last ? `   @${fmt(c.u - last.u, 2)},${fmt(c.v - last.v, 2)}` : '';
+    this.app.setCoords(`Croquis  X ${fmt(c.u, 2)}  Y ${fmt(c.v, 2)}${rel}${this.app.settings.sketchOrtho ? '   ORTO' : ''}`);
+  }
+
+  // Cotas de todas las entidades, colocadas junto a su tramo en pantalla
+  updateDims() {
+    const box = this.dimBox;
+    if (!this.app.settings.sketchDims || this.app.featureForm) {
+      box.replaceChildren();
+      return;
+    }
+    const o = this.screenOf(0, 0), ux = this.screenOf(1, 0);
+    const ppu = Math.max(1e-6, Math.hypot(ux.x - o.x, ux.y - o.y)); // píxeles por mm
+    const shift = { below: [0, -16 / ppu], above: [0, 14 / ppu], right: [16 / ppu, 0] };
+    const labels = [];
+    for (const e of this.entities) {
+      const dims = entityDims(e);
+      if (e.t === 'poly' && dims.length > 40) continue;
+      for (const d of dims) {
+        if (d.a) {
+          const a = this.screenOf(d.a[0], d.a[1]), b = this.screenOf(d.b[0], d.b[1]);
+          if (Math.hypot(a.x - b.x, a.y - b.y) < 40) continue;
+        }
+        const [du, dv] = shift[d.side] || [0, 0];
+        const s = this.screenOf(d.u + du, d.v + dv);
+        labels.push([s, d.text]);
+      }
+    }
+    while (box.children.length > labels.length) box.lastChild.remove();
+    while (box.children.length < labels.length) box.append(h('span', { class: 'sk-dim' }));
+    labels.forEach(([s, text], i) => {
+      const el = box.children[i];
+      if (el.textContent !== text) el.textContent = text;
+      el.style.transform = `translate(${s.x}px, ${s.y}px) translate(-50%, -50%)`;
+    });
   }
 
   // ------------------------------------------------------------ entrada numérica
   showInput(first) {
-    const ph = {
-      rect: 'ancho x alto',
-      rectc: 'ancho x alto',
-      circle: 'radio',
-      ngon: 'radio',
-      line: 'longitud  o  longitud<ángulo',
-      slot: this.pts.length === 1 ? 'longitud  o  longitud<ángulo' : 'radio',
-    }[this.tool];
+    const ph = VALUE_TOOLS[this.tool]
+      ? { offset: 'distancia de desfase', fillet: 'radio de empalme', chamfer: 'distancia del chaflán' }[this.tool]
+      : !this.pts.length
+        ? 'primer punto: x,y'
+        : {
+            rect: 'ancho x alto  o  @dx,dy',
+            rectc: 'ancho x alto',
+            circle: 'radio',
+            ngon: 'radio',
+            line: 'longitud · x,y · @dx,dy · @long<ángulo',
+            slot: this.pts.length === 1 ? 'longitud · x,y · @dx,dy · @long<ángulo' : 'radio',
+          }[this.tool];
     if (!ph) return;
     this.input.placeholder = ph;
     this.input.value = first || '';
@@ -654,9 +833,35 @@ export class Sketcher {
   }
 
   applyTyped(txt) {
+    const vk = VALUE_TOOLS[this.tool];
+    if (vk) {
+      const v = Math.abs(evalNum(txt));
+      if (!(v > 0)) return toast('Valor no válido', 'warn');
+      this[vk] = r6(v);
+      this.updatePreview();
+      this.app.renderProps();
+      return;
+    }
     const a = this.pts[0];
-    if (!a) return;
+    if (!a) {
+      // Primer punto escrito con coordenadas
+      const p = parsePoint(txt, null);
+      if (!p) return toast('Escribe el punto como x,y (por ejemplo 0,0 o -40,25)', 'warn');
+      this.pts.push(p);
+      this.updatePreview();
+      return;
+    }
     const c = this.cursor || a;
+    // Segundo punto relativo: "@dx,dy" (en el rectángulo también "x,y" absoluto)
+    const pointLike = txt.trim().startsWith('@') || (this.tool === 'rect' && txt.includes(','));
+    if (pointLike && ['rect', 'rectc', 'circle', 'ngon'].includes(this.tool)) {
+      const p = parsePoint(txt, a);
+      const e = p && this.entityFrom(a, p);
+      if (!e) return toast('Punto no válido', 'warn');
+      this.pts = [];
+      this.addEntity(e);
+      return;
+    }
     const parts = txt.split(/\s*[x×;*\s]\s*/i).filter(Boolean).map((s) => evalNum(s));
     const [n1, n2] = parts;
     const sign = (v) => (v < 0 ? -1 : 1);
@@ -682,10 +887,19 @@ export class Sketcher {
       return;
     }
     if (this.tool === 'line' || this.tool === 'slot') {
+      const last = this.pts[this.pts.length - 1];
+      const pt = parsePoint(txt, last);
+      if (pt) {
+        if (Math.hypot(pt.u - last.u, pt.v - last.v) < 1e-9) return;
+        const first = this.pts[0];
+        if (this.tool === 'line' && this.pts.length >= 3 && Math.hypot(pt.u - first.u, pt.v - first.v) < 1e-9) return this.closePoly();
+        this.pts.push(pt);
+        this.updatePreview();
+        return;
+      }
       const [ls, as] = txt.split(/[<@]/);
       const len = evalNum(ls);
       if (!(len > 0)) return toast('Longitud no válida', 'warn');
-      const last = this.pts[this.pts.length - 1];
       let ang;
       if (as != null && as.trim()) ang = evalNum(as) * DEG;
       else {
@@ -715,6 +929,18 @@ function distToSeg(p, a, b) {
   let t = l2 ? ((p.u - a.u) * dx + (p.v - a.v) * dy) / l2 : 0;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.u - (a.u + t * dx), p.v - (a.v + t * dy));
+}
+
+// Vértices de una polilínea que son esquinas (omite los puntos intermedios de los arcos)
+function polyCorners(l) {
+  if (l.length <= 12) return l;
+  return l.filter((p, i) => {
+    const a = l[(i - 1 + l.length) % l.length], b = l[(i + 1) % l.length];
+    const t1 = Math.atan2(p[1] - a[1], p[0] - a[0]), t2 = Math.atan2(b[1] - p[1], b[0] - p[0]);
+    let d = Math.abs(t2 - t1);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    return d > 20 * DEG;
+  });
 }
 
 function pointIn(pt, l) {
